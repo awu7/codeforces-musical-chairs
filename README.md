@@ -11,7 +11,7 @@ cd ../server && npm install && ADMIN_PASSWORD=secret DATA_DIR=../data npm start 
 
 - Client: `/` (enter a seat code). Admin: `/admin`. Scoreboard: `/scoreboard`.
 - Development: run `npm run dev` in both `server/` and `web/` (Vite on :5173 proxies to :3001).
-- Run and local sample/test judging compile and execute contestant code only inside `ioi/isolate`; they do not require a Codeforces account. Codeforces statement fetching and forwarded submissions use Chrome with CDP (default `http://localhost:29229`, configurable in Judge & languages).
+- Run and local sample/test judging compile and execute contestant code only inside `ioi/isolate`; they do not require a Codeforces account. Codeforces statement fetching and forwarded submissions use a real Chrome: by default the server launches one (installed Chrome or `CHROME_PATH`) with automation flags hidden; click through any Cloudflare check in its window. Alternatively connect to a Chrome you started with `--remote-debugging-port` (Judge & languages).
 - In **Self-submit on Codeforces** mode, each seat stores the Codeforces handle signed in on that computer. Contestants submit directly on Codeforces; the server polls the public API more often after a submit or refresh request, but never submits code in this mode. Optional browser-side polling can be enabled in Settings and is off by default.
 - `outputLimitKb` limits output shown to Run clients; `maxOutputMb` controls the sandbox's file-size limit and the full output available to local judging.
 - Tests: `cd server && npx tsc --noEmit && npm run test:e2e && npx tsx test/isolate.ts && npx tsx test/cf-rate-limit.ts`.

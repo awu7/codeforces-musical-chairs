@@ -90,6 +90,8 @@ export class CodeforcesBridge {
       const context = await chromium.launchPersistentContext(profile, {
         ...(executablePath ? { executablePath } : { channel: 'chrome' }),
         headless: false,
+        ignoreDefaultArgs: ['--enable-automation'],
+        args: ['--disable-blink-features=AutomationControlled'],
       });
       this.browser = context.browser();
       if (!this.browser) throw new Error('Could not start Chrome');

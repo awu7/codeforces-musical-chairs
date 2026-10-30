@@ -57,7 +57,7 @@ function freshState(): PersistedState {
     problems: [],
     languages: structuredClone(DEFAULT_LANGUAGES),
     cfAccounts: [],
-    cfBridge: { mode: 'cdp', cdpUrl: 'http://localhost:29229', connected: false, queueLength: 0, lastError: null },
+    cfBridge: { mode: 'launch', cdpUrl: 'http://localhost:29229', connected: false, queueLength: 0, lastError: null },
     adminTokens: [],
     log: [],
     rev: 0,
