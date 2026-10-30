@@ -132,7 +132,6 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
   const [tab, setTab] = useState<Tab>('output');
   const [run, setRun] = useState<RunResult | null>(null);
   const [running, setRunning] = useState(false);
-  const [expected, setExpected] = useState<string | null>(null);
   const [submitMsg, setSubmitMsg] = useState<string | null>(null);
   const [lastSubmit, setLastSubmit] = useState(0);
   const [showBoard, setShowBoard] = useState(false);
@@ -182,7 +181,6 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
       setCodes(slot.code);
       setInput(slot.input);
       setRun(null);
-      setExpected(null);
       setSubmitMsg(null);
       if (rotated && view.clock.lazyMode) {
         setToast('Rotated — new problem on this computer');
@@ -230,7 +228,6 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
   };
   const onInput = (v: string) => {
     setInput(v);
-    setExpected(null);
     pending.current.input = v;
     schedule();
   };
@@ -383,10 +380,7 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
                       key={i}
                       className="small"
                       disabled={locked}
-                      onClick={() => {
-                        onInput(s.input);
-                        setExpected(s.output);
-                      }}
+                      onClick={() => onInput(s.input)}
                     >
                       Sample {i + 1}
                     </button>
@@ -406,7 +400,7 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
                   Submissions {slot.submissions.length ? `(${slot.submissions.length})` : ''}
                 </button>
               </div>
-              {tab === 'output' ? <OutputPanel run={run} running={running} expected={expected} /> : <SubmissionsPanel subs={slot.submissions} msg={submitMsg} />}
+              {tab === 'output' ? <OutputPanel run={run} running={running} /> : <SubmissionsPanel subs={slot.submissions} msg={submitMsg} />}
             </div>
           </div>
         </section>
@@ -474,14 +468,10 @@ function LockOverlay({ view }: { view: SeatView }) {
   );
 }
 
-function norm(s: string) {
-  return s.trim().split(/\s+/).join(' ');
-}
 
-function OutputPanel({ run, running, expected }: { run: RunResult | null; running: boolean; expected: string | null }) {
+function OutputPanel({ run, running }: { run: RunResult | null; running: boolean }) {
   if (running) return <div className="out muted">Running…</div>;
   if (!run) return <div className="out muted">Run your code to see output here.</div>;
-  const match = expected !== null && run.status === 'ok' ? norm(run.stdout) === norm(expected) : null;
   return (
     <div className="out">
       <div className="out-status">
@@ -490,17 +480,10 @@ function OutputPanel({ run, running, expected }: { run: RunResult | null; runnin
           {run.timeMs} ms{run.exitCode != null && run.exitCode !== 0 ? ` · exit ${run.exitCode}` : ''}
           {run.truncated ? ' · output truncated' : ''}
         </span>
-        {match !== null && <span className={`badge ${match ? 'good' : 'bad'}`}>{match ? 'matches sample' : 'differs from sample'}</span>}
       </div>
       {run.compileOutput && <pre className="mono err">{run.compileOutput}</pre>}
       <pre className="mono">{run.stdout}</pre>
       {run.stderr && <pre className="mono err">{run.stderr}</pre>}
-      {match === false && (
-        <>
-          <div className="muted small-head">Expected</div>
-          <pre className="mono">{expected}</pre>
-        </>
-      )}
     </div>
   );
 }
