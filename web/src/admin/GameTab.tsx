@@ -70,7 +70,11 @@ export default function GameTab() {
           </button>
           <span className="spacer" />
           <label className="field inline">
-            <input type="checkbox" checked={s.config.lazyMode} onChange={(e) => act('PUT', '/config', { lazyMode: e.target.checked }).catch(() => {})} /> Lazy mode
+            <input
+              type="checkbox"
+              checked={s.teams.length ? s.teams.every((team) => team.lazyMode) : s.config.lazyMode}
+              onChange={(e) => act('PUT', '/config', { lazyMode: e.target.checked }).catch(() => {})}
+            /> Lazy mode (all teams)
           </label>
           <label className="field inline">
             <input type="checkbox" checked={s.config.autoAdvance} onChange={(e) => act('PUT', '/config', { autoAdvance: e.target.checked }).catch(() => {})} /> Auto-advance rounds

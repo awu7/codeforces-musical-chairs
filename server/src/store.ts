@@ -85,6 +85,9 @@ export class Store extends EventEmitter {
       const parsed = JSON.parse(await readFile(this.file, 'utf8')) as Partial<PersistedState>;
       const base = freshState();
       const savedConfig: Record<string, unknown> = { ...parsed.config };
+      const defaultTeamLazyMode = typeof savedConfig.lazyMode === 'boolean'
+        ? savedConfig.lazyMode
+        : base.config.lazyMode;
       const languages = parsed.languages?.map((language) => {
         const defaultLanguage = base.languages.find((item) => item.id === language.id);
         const savedLanguage = language as Language;
@@ -104,6 +107,7 @@ export class Store extends EventEmitter {
         delete teamFields.selfSubmitStatus;
         return {
           ...teamFields,
+          lazyMode: legacyTeam.lazyMode ?? defaultTeamLazyMode,
           seats: team.seats.map((seat) => ({
             ...seat,
             cfHandle: seat.cfHandle?.trim() || legacyHandle,

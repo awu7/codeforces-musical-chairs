@@ -57,7 +57,7 @@ export class GameEngine {
     if (this.tickTimer) clearInterval(this.tickTimer);
   }
 
-  clock(now = Date.now()): GameClock {
+  clock(now = Date.now(), team?: Team): GameClock {
     const state = this.store.state;
     return {
       phase: state.phase,
@@ -66,7 +66,7 @@ export class GameEngine {
       roundEndsAt: state.phase === 'running' ? state.roundEndsAt : null,
       transitionEndsAt: state.phase === 'transition' ? state.transitionEndsAt : null,
       pausedRemainingMs: state.phase === 'paused' ? state.pausedRemainingMs : null,
-      lazyMode: state.config.lazyMode,
+      lazyMode: team?.lazyMode ?? state.config.lazyMode,
       serverNow: now,
     };
   }
@@ -110,6 +110,7 @@ export class GameEngine {
       size,
       rating: initialRating,
       startRating: null,
+      lazyMode: state.config.lazyMode,
       processedCfSubmissionIds: [],
       seats,
       slots,
@@ -282,7 +283,8 @@ export class GameEngine {
     this.rotate();
     state.phase = 'transition';
     state.roundEndsAt = null;
-    const seconds = state.config.lazyMode ? state.config.lazyTransitionSeconds : state.config.transitionSeconds;
+    const hasPhysicalTeam = state.teams.some((team) => team.enabled && !team.lazyMode);
+    const seconds = hasPhysicalTeam ? state.config.transitionSeconds : state.config.lazyTransitionSeconds;
     state.transitionEndsAt = Date.now() + Math.max(0, seconds * 1000);
     state.pausedRemainingMs = null;
     this.store.log('info', `Round ${state.round} ended`);
@@ -308,7 +310,7 @@ export class GameEngine {
           this.drawForSlot(team, slot, state.round + 1);
         }
       }
-      if (state.config.lazyMode) {
+      if (team.lazyMode) {
         for (const slot of team.slots) {
           slot.seatIndex = (slot.seatIndex - state.config.rotationDirection + team.size) % team.size;
         }
@@ -510,7 +512,8 @@ export class GameEngine {
   acceptsLateFlush(slotId: string, seatIndex: number): boolean {
     const previous = this.lateFlushSeats.get(slotId);
     if (!previous || previous.until < Date.now() || previous.seatIndex !== seatIndex) return false;
-    return this.store.state.phase === 'transition' || (this.store.state.config.lazyMode && this.store.state.phase === 'running');
+    const team = this.findSlot(slotId)?.team;
+    return this.store.state.phase === 'transition' || ((team?.lazyMode ?? this.store.state.config.lazyMode) && this.store.state.phase === 'running');
   }
 
   drawReplacement(team: Team, slot: Slot, problemId?: string, rating?: number): void {
@@ -611,7 +614,7 @@ export class GameEngine {
         cfHandle: seat.cfHandle,
         selfSubmitStatus: seat.selfSubmitStatus,
       },
-      clock: this.clock(),
+      clock: this.clock(Date.now(), team),
       lock: this.lockForSeat(),
       announcement: this.store.state.announcement,
       config: {

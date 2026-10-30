@@ -141,6 +141,7 @@ export interface Team {
   size: number;
   rating: number;                 // used when difficulty.scope === 'team'
   startRating: number | null;     // per-team override of difficulty.startRating
+  lazyMode: boolean;
   processedCfSubmissionIds: number[];
   seats: Seat[];
   slots: Slot[];                  // always `size` slots

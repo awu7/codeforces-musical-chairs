@@ -101,6 +101,9 @@ function makeRouter(deps: AdminDependencies): Router {
     const config = mergeConfig(store.state.config, patch);
     if (!config.difficulty.step || config.difficulty.step < 1) throw new Error('difficulty.step must be positive');
     store.state.config = config;
+    if (patch.lazyMode !== undefined) {
+      for (const team of store.state.teams) team.lazyMode = Boolean(patch.lazyMode);
+    }
     if (!config.freezeScoreboard) store.state.frozenScoreboard = null;
     store.log('info', 'Configuration updated');
     engine.changed();
@@ -161,6 +164,7 @@ function makeRouter(deps: AdminDependencies): Router {
     if (body.size !== undefined && Number(body.size) !== team.size) engine.resizeTeam(team, Number(body.size));
     if (body.rating !== undefined) team.rating = Number(body.rating);
     if (body.startRating !== undefined) team.startRating = body.startRating === null ? null : Number(body.startRating);
+    if (body.lazyMode !== undefined) team.lazyMode = Boolean(body.lazyMode);
     if (body.enabled !== undefined) team.enabled = Boolean(body.enabled);
     engine.changed();
     res.json(team);

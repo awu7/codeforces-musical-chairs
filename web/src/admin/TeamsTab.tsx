@@ -112,6 +112,9 @@ function TeamRow({ t, setup }: { t: Team; setup: boolean }) {
         <label className="field inline">
           <input type="checkbox" checked={t.enabled} onChange={(e) => put({ enabled: e.target.checked })} /> enabled
         </label>
+        <label className="field inline">
+          <input type="checkbox" checked={t.lazyMode} onChange={(e) => put({ lazyMode: e.target.checked })} /> lazy mode
+        </label>
         <span className="spacer" />
         <button onClick={() => confirm('Regenerate seat codes? Connected clients are kicked.') && act('POST', `/teams/${t.id}/regenerate-codes`, {}).catch(() => {})}>Regenerate codes</button>
         <button className="danger" onClick={() => confirm(`Delete ${t.name}?`) && act('DELETE', `/teams/${t.id}`).catch(() => {})}>

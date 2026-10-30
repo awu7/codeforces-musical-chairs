@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { io as connectSocket, type Socket } from 'socket.io-client';
@@ -190,6 +190,31 @@ async function testOrderedDifficulty(): Promise<void> {
   }
 }
 
+async function testTeamLazyModeMigration(): Promise<void> {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-lazy-migration-'));
+  let backend: Backend | null = null;
+  try {
+    backend = await createBackend({ dataDir, runner: fakeRunner });
+    backend.store.state.config.lazyMode = true;
+    backend.engine.createTeam('Legacy team', 1);
+    await backend.close();
+    backend = null;
+
+    const statePath = path.join(dataDir, 'state.json');
+    const persisted = JSON.parse(await readFile(statePath, 'utf8')) as {
+      teams: Array<Record<string, unknown>>;
+    };
+    delete persisted.teams[0]!.lazyMode;
+    await writeFile(statePath, JSON.stringify(persisted));
+
+    backend = await createBackend({ dataDir, runner: fakeRunner });
+    assert.equal(backend.store.state.teams[0]?.lazyMode, true, 'legacy teams inherit the loaded config lazy mode');
+  } finally {
+    if (backend) await backend.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+}
+
 async function run(): Promise<void> {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-e2e-'));
   let backend: Backend | null = null;
@@ -222,8 +247,8 @@ async function run(): Promise<void> {
     const token = login.token;
     await request(base, '/api/admin/config', 'PUT', {
       roundMinutes: 0.25,
-      transitionSeconds: 2,
-      lazyTransitionSeconds: 2,
+      transitionSeconds: 4,
+      lazyTransitionSeconds: 1,
       submissionCooldownSeconds: 0,
       uniqueness: 'global',
       judgeMode: 'local',
@@ -269,7 +294,11 @@ async function run(): Promise<void> {
     const accepted = await waitForSubmission(base, token, submissionReply.submissionId!);
     assert.equal(accepted.verdict, 'OK');
     assert.deepEqual(lastRunLimits, { timeMs: 1000, memoryMb: 128 });
-    type AdminSnapshot = { attempts: Attempt[]; teams: Team[]; clock: { roundEndsAt: number | null } };
+    type AdminSnapshot = {
+      attempts: Attempt[];
+      teams: Team[];
+      clock: { roundEndsAt: number | null; transitionEndsAt: number | null };
+    };
     let admin = await request<AdminSnapshot>(
       base, '/api/admin/state', 'GET', undefined, token,
     );
@@ -331,11 +360,38 @@ async function run(): Promise<void> {
       const slot = physicalSlots.find((item) => item.id === slotsAtSeats.get(`${entry.team.id}:${entry.seatIndex}`));
       assert.equal(slot?.seatIndex, entry.seatIndex, 'physical rotation keeps slot ids at their seats');
     }
-    await request(base, '/api/admin/config', 'PUT', { lazyMode: true }, token);
+    await request(base, `/api/admin/teams/${team2.id}`, 'PUT', { lazyMode: true }, token);
+    await request(base, `/api/admin/teams/${team3.id}`, 'PUT', { lazyMode: false }, token);
     await waitForPhase(joined, 'running', 2);
-    const lazyBefore = new Map(admin.teams.flatMap((team) => team.slots.map((slot) => [slot.id, slot.seatIndex])));
+    const mixedBefore = await request<AdminSnapshot>(base, '/api/admin/state', 'GET', undefined, token);
     await waitForPhase(joined, 'transition');
+    const mixedTransition = await request<AdminSnapshot>(base, '/api/admin/state', 'GET', undefined, token);
+    const transitionEndsAt = mixedTransition.clock.transitionEndsAt;
+    assert.ok(transitionEndsAt, 'mixed-mode transition has an end time');
+    const transitionRemainingMs = transitionEndsAt! - Date.now();
+    assert.ok(
+      transitionRemainingMs > 1500 && transitionRemainingMs <= 4000,
+      `mixed transition should use the physical duration (remaining ${transitionRemainingMs}ms)`,
+    );
+    for (const team of mixedTransition.teams) {
+      const before = mixedBefore.teams.find((item) => item.id === team.id)!;
+      for (const slot of team.slots) {
+        const oldIndex = before.slots.find((item) => item.id === slot.id)?.seatIndex;
+        if (oldIndex === undefined) continue;
+        const expected = team.id === team2.id ? (oldIndex - 1 + team.size) % team.size : oldIndex;
+        assert.equal(slot.seatIndex, expected, team.id === team2.id
+          ? 'lazy team shifts slots during mixed rotation'
+          : 'physical team keeps slot indices during mixed rotation');
+      }
+    }
+
+    await request(base, '/api/admin/config', 'PUT', { lazyMode: true }, token);
     await waitForPhase(joined, 'running', 3);
+    const lazyBeforeState = await request<AdminSnapshot>(base, '/api/admin/state', 'GET', undefined, token);
+    assert.ok(lazyBeforeState.teams.every((team) => team.lazyMode), 'global lazy mode sets all existing teams');
+    const lazyBefore = new Map(lazyBeforeState.teams.flatMap((team) => team.slots.map((slot) => [slot.id, slot.seatIndex])));
+    await waitForPhase(joined, 'transition');
+    await waitForPhase(joined, 'running', 4);
     admin = await request<AdminSnapshot>(base, '/api/admin/state', 'GET', undefined, token);
     for (const team of admin.teams) {
       for (const slot of team.slots) {
@@ -380,7 +436,7 @@ async function run(): Promise<void> {
       base, '/api/admin/state', 'GET', undefined, restored.token,
     );
     assert.equal(resumedState.clock.phase, 'running', 'restart should restore running phase');
-    assert.equal(resumedState.clock.round, 3);
+    assert.equal(resumedState.clock.round, 4);
     assert.ok(resumedState.clock.roundEndsAt);
     await new Promise((resolve) => setTimeout(resolve, 200));
     const timerAfterRestart = await request<{ clock: { roundEndsAt: number | null } }>(
@@ -388,7 +444,7 @@ async function run(): Promise<void> {
     );
     assert.equal(timerAfterRestart.clock.roundEndsAt, resumedState.clock.roundEndsAt, 'persisted deadline continues after restart');
     const afterRestartSeat = await connectSeat(base, team2.seats[0]!.code);
-    await waitForView(afterRestartSeat.socket, (view) => view.clock.phase === 'running' && view.clock.round === 4, 30_000);
+    await waitForView(afterRestartSeat.socket, (view) => view.clock.phase === 'running' && view.clock.round === 5, 30_000);
 
     for (const socket of sockets) socket.disconnect();
     sockets.length = 0;
@@ -396,7 +452,8 @@ async function run(): Promise<void> {
     backend = null;
     await runSelfSubmitE2e();
     await testOrderedDifficulty();
-    console.log('E2E PASS: auth, teams/seats, distinct draw, local accept/reject, injected run, physical/lazy rotation, expiry, pause/resume, restart persistence, defaults migration, self-submit polling');
+    await testTeamLazyModeMigration();
+    console.log('E2E PASS: auth, teams/seats, distinct draw, local accept/reject, injected run, mixed/per-team lazy rotation, expiry, pause/resume, restart persistence, defaults migration, self-submit polling');
   } finally {
     for (const socket of sockets) socket.disconnect();
     if (backend) await backend.close();

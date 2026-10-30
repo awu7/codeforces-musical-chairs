@@ -18,7 +18,7 @@ const GROUPS: [string, Field<GameConfig>[]][] = [
   [
     'Rotation',
     [
-      { k: 'lazyMode', label: 'Lazy mode (rotate problems, not people)', type: 'bool' },
+      { k: 'lazyMode', label: 'Lazy mode (sets all teams; default for new teams)', type: 'bool' },
       { k: 'lazyTransitionSeconds', label: 'Lazy mode lock time (s, 0 = instant)', type: 'num' },
       { k: 'rotationDirection', label: 'Direction', type: 'select', opts: [['1', 'Next computer (seat i → i+1)'], ['-1', 'Previous computer (seat i → i−1)']] },
       { k: 'maxRoundsPerProblem', label: 'Rounds before an unsolved problem is replaced (blank = team size)', type: 'numnull', hint: 'Capped at team size so nobody sees a problem twice' },
