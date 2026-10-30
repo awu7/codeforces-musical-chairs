@@ -20,6 +20,12 @@ interface SocketDependencies {
 type Ack = (result: any) => void;
 type JoinedSeat = { teamId: string; seatIndex: number; code: string };
 
+function capOutput(text: string, limitBytes: number): { text: string; truncated: boolean } {
+  const buffer = Buffer.from(text, 'utf8');
+  if (buffer.byteLength <= limitBytes) return { text, truncated: false };
+  return { text: buffer.subarray(0, limitBytes).toString('utf8'), truncated: true };
+}
+
 export function createSocketServer(deps: SocketDependencies): Server {
   const { httpServer, store, engine, runner, judging } = deps;
   const io = new Server(httpServer, { cors: { origin: true, credentials: true } });
@@ -162,7 +168,17 @@ export function createSocketServer(deps: SocketDependencies): Server {
           timeMs: store.state.config.runTimeLimitMs,
           memoryMb: store.state.config.runMemoryMb,
         });
-        ack?.(result);
+        const displayLimitBytes = Math.max(1, Math.floor(store.state.config.outputLimitKb)) * 1024;
+        const stdout = capOutput(result.stdout, displayLimitBytes);
+        const stderr = capOutput(result.stderr, displayLimitBytes);
+        const compileOutput = capOutput(result.compileOutput, displayLimitBytes);
+        ack?.({
+          ...result,
+          stdout: stdout.text,
+          stderr: stderr.text,
+          compileOutput: compileOutput.text,
+          truncated: result.truncated || stdout.truncated || stderr.truncated || compileOutput.truncated,
+        });
       } catch (caught) {
         ack?.(error((caught as Error).message));
       } finally {

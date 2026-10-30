@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,7 +13,9 @@ await store.load();
 store.state.config.isolateBoxBase = 500;
 store.state.config.maxConcurrentRuns = 4;
 store.state.config.outputLimitKb = 64;
+store.state.config.maxOutputMb = 64;
 const runner = new IsolateRunner(store);
+const isolate = process.env.ISOLATE_BIN ?? 'isolate';
 const cpp = store.state.languages.find((language) => language.id === 'cpp20') ?? DEFAULT_LANGUAGES[0]!;
 const python = store.state.languages.find((language) => language.id === 'py3')!;
 
@@ -22,6 +25,11 @@ async function check(name: string, result: Awaited<ReturnType<IsolateRunner['run
 }
 
 try {
+  try {
+    execFileSync(isolate, ['--cg', '-b', '500', '--cleanup'], { stdio: 'ignore' });
+  } catch {}
+  execFileSync(isolate, ['--cg', '-b', '500', '--init'], { stdio: 'ignore' });
+
   const cppOk = await runner.run(cpp, '#include <iostream>\nint main(){int a,b;std::cin>>a>>b;std::cout<<a+b<<"\\n";}\n', '3 4\n');
   await check('C++20 stdout', cppOk);
   assert.equal(cppOk.stdout.trim(), '7');
@@ -29,6 +37,21 @@ try {
   const pyOk = await runner.run(python, 'import sys\nprint(sum(map(int, sys.stdin.read().split())))\n', '5 6\n');
   await check('Python 3 stdout', pyOk);
   assert.equal(pyOk.stdout.trim(), '11');
+
+  const outputLines = 200_000;
+  const largeOutput = await runner.run(python, `for _ in range(${outputLines}): print("hello")\n`, '');
+  assert.equal(largeOutput.status, 'ok', largeOutput.stderr);
+  assert.equal(largeOutput.stdout.length, outputLines * 'hello\n'.length);
+  assert.equal(largeOutput.truncated, false);
+  console.log(`PASS 1.2 MB stdout: ${largeOutput.stdout.length} chars`);
+
+  store.state.config.maxOutputMb = 1;
+  const outputLimit = await runner.run(python, 'import sys\nsys.stdout.write("x" * (2 * 1024 * 1024))\n', '');
+  assert.equal(outputLimit.status, 'runtime_error');
+  assert.match(outputLimit.stderr, /output limit exceeded/i);
+  assert.equal(outputLimit.truncated, true);
+  console.log(`PASS maxOutputMb enforcement: status=${outputLimit.status} truncated=${outputLimit.truncated}`);
+  store.state.config.maxOutputMb = 64;
 
   const compileError = await runner.run(cpp, 'int main( { return 0; }\n', '');
   assert.equal(compileError.status, 'compile_error');
@@ -80,6 +103,7 @@ try {
   assert.equal(filesystem.stdout.trim(), 'blocked');
   console.log('PASS host filesystem access blocked');
 
+  store.state.config.maxOutputMb = 1;
   const fileSize = await runner.run(
     python,
     'try:\n f=open("large.bin","wb")\n for _ in range(100): f.write(b"x"*1024*1024)\n f.close()\n print("unexpected")\nexcept OSError:\n print("blocked")\n',
@@ -88,6 +112,7 @@ try {
   assert.equal(fileSize.status, 'ok', fileSize.stderr);
   assert.equal(fileSize.stdout.trim(), 'blocked');
   console.log('PASS 100MB file creation blocked by fsize');
+  store.state.config.maxOutputMb = 64;
 
   const parallel = await Promise.all(Array.from({ length: 4 }, () =>
     runner.run(python, 'print("parallel")\n', ''),
@@ -95,6 +120,9 @@ try {
   assert.ok(parallel.every((result) => result.status === 'ok' && result.stdout.trim() === 'parallel'));
   console.log('PASS four concurrent isolate runs');
 } finally {
+  try {
+    execFileSync(isolate, ['--cg', '-b', '500', '--cleanup'], { stdio: 'ignore' });
+  } catch {}
   await store.close();
   await rm(dataDir, { recursive: true, force: true });
 }

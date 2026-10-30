@@ -44,7 +44,8 @@ const GROUPS: [string, Field<GameConfig>[]][] = [
       { k: 'compileTimeLimitMs', label: 'Compile time limit (ms)', type: 'num' },
       { k: 'maxConcurrentRuns', label: 'Maximum concurrent runs', type: 'num' },
       { k: 'isolateBoxBase', label: 'First isolate box id', type: 'num' },
-      { k: 'outputLimitKb', label: 'Output / file size limit (KB)', type: 'num' },
+      { k: 'outputLimitKb', label: 'Run display output limit (KB)', type: 'num' },
+      { k: 'maxOutputMb', label: 'Maximum output/file size (MB)', type: 'num' },
     ],
   ],
   [

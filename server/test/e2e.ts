@@ -17,7 +17,7 @@ const fakeRunner: Runner = {
     const outputs = new Map([['3 4\n', '7\n'], ['10 -2\n', '8\n']]);
     return {
       status: 'ok',
-      stdout: code.includes('wrong') ? 'wrong\n' : outputs.get(input) ?? '',
+      stdout: code.includes('display-cap') ? 'x'.repeat(70 * 1024) : code.includes('wrong') ? 'wrong\n' : outputs.get(input) ?? '',
       stderr: '',
       compileOutput: '',
       timeMs: 1,
@@ -127,6 +127,7 @@ async function run(): Promise<void> {
     assert.equal(backend.store.state.config.runTimeLimitMs, 2000);
     assert.equal(backend.store.state.config.runMemoryMb, 256);
     assert.equal(backend.store.state.config.compileTimeLimitMs, 15000);
+    assert.equal(backend.store.state.config.maxOutputMb, 64);
     assert.ok(backend.store.state.config.maxConcurrentRuns > 0 && backend.store.state.config.maxConcurrentRuns <= 4);
     assert.ok(backend.store.state.languages.find((language) => language.id === 'cpp20')?.compile?.length);
     assert.deepEqual(backend.store.state.languages.find((language) => language.id === 'py3')?.run, ['python3', '{src}']);
@@ -204,7 +205,7 @@ async function run(): Promise<void> {
     const rejected = await waitForSubmission(base, token, submissionReply.submissionId!);
     assert.equal(rejected.verdict, 'WRONG_ANSWER');
 
-    const runResult = await new Promise<{ status: string; stdout: string; stderr: string }>((resolve) => {
+    const runResult = await new Promise<RunResult>((resolve) => {
       solving.socket.emit('run', {
         slotId: solving.view.slot.id,
         lang: 'cpp20',
@@ -214,6 +215,17 @@ async function run(): Promise<void> {
     });
     assert.equal(runResult.status, 'ok', runResult.stderr);
     assert.equal(runResult.stdout.trim(), '7');
+
+    const displayLimitedRun = await new Promise<RunResult>((resolve) => {
+      solving.socket.emit('run', {
+        slotId: solving.view.slot.id,
+        lang: 'cpp20',
+        code: 'display-cap',
+        input: '',
+      }, resolve);
+    });
+    assert.equal(displayLimitedRun.stdout.length, 64 * 1024);
+    assert.equal(displayLimitedRun.truncated, true);
 
     await request(base, '/api/admin/config', 'PUT', { judgeMode: 'codeforces' }, token);
     const noAccountSubmission = await submit(solving.socket, solving.view.slot.id, correctCode);

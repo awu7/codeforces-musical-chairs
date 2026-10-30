@@ -36,6 +36,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   maxConcurrentRuns: Math.max(1, Math.min(4, availableParallelism())),
   isolateBoxBase: 0,
   outputLimitKb: 64,
+  maxOutputMb: 64,
   submissionCooldownSeconds: 10,
   maxSubmissionsPerProblem: null,
   showScoreboardToClients: false,

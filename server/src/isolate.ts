@@ -60,6 +60,10 @@ function resolveExecutable(args: string[]): string[] {
   return command && !command.includes('/') ? ['/usr/bin/env', command, ...rest] : args;
 }
 
+function isOutputLimitExceeded(meta: Record<string, string>, stderr: string): boolean {
+  return Number(meta.exitsig ?? meta.signal) === 25 || /File too large|File size limit exceeded|SIGXFSZ/i.test(stderr);
+}
+
 async function readCapped(file: string, limitBytes: number): Promise<{ text: string; truncated: boolean }> {
   try {
     const buffer = await readFile(file);
@@ -136,9 +140,11 @@ export class IsolateRunner implements Runner {
       const config = this.store.state.config;
       const timeMs = Math.max(1, Math.floor(limits?.timeMs ?? config.runTimeLimitMs));
       const memoryMb = Math.max(1, Math.floor(limits?.memoryMb ?? config.runMemoryMb));
-      const outputLimitKb = Math.max(1, Math.floor(config.outputLimitKb));
+      const maxOutputMb = Math.max(1, Math.floor(config.maxOutputMb));
+      const maxOutputBytes = maxOutputMb * 1024 * 1024;
       const source = languageSource(language);
       const executable = 'program';
+      await execute(this.binary, ['--cg', '-b', String(id), '--cleanup'], 10_000);
       const init = await execute(this.binary, ['--cg', '-b', String(id), '--init'], 10_000);
       boxDir = init.stdout.trim().split(/\r?\n/).at(-1) ?? '';
       if (init.error || init.exitCode !== 0 || !boxDir) return errorResult('Sandbox (isolate) unavailable');
@@ -169,9 +175,8 @@ export class IsolateRunner implements Runner {
         const compiled = await execute(this.binary, compileArgs, config.compileTimeLimitMs + 10_000);
         if (isMissingBinary(compiled.error)) return errorResult('Sandbox (isolate) unavailable');
         const meta = parseMeta(await readFile(compileMeta, 'utf8').catch(() => ''));
-        const outputLimitBytes = outputLimitKb * 1024;
-        const stdout = await readCapped(path.join(boxDir, 'box', 'compile.stdout'), outputLimitBytes);
-        const stderr = await readCapped(path.join(boxDir, 'box', 'compile.stderr'), outputLimitBytes);
+        const stdout = await readCapped(path.join(boxDir, 'box', 'compile.stdout'), maxOutputBytes);
+        const stderr = await readCapped(path.join(boxDir, 'box', 'compile.stderr'), maxOutputBytes);
         const compileOutput = `${stdout.text}${stderr.text}`;
         if (meta.status === 'XX' || (!Object.keys(meta).length && compiled.exitCode !== 0)) {
           return errorResult(compiled.stderr || 'Sandbox (isolate) failed while compiling');
@@ -200,7 +205,7 @@ export class IsolateRunner implements Runner {
         `--time=${runTimeSec}`,
         `--wall-time=${wallTimeSec}`,
         `--processes=${Math.max(1, Math.floor(language.processes ?? 1))}`,
-        `--fsize=${outputLimitKb}`,
+        `--fsize=${maxOutputMb * 1024}`,
         '-E', 'PATH=/usr/bin:/bin',
         '--chdir=/box',
         '--stdin=/box/input.txt',
@@ -213,20 +218,22 @@ export class IsolateRunner implements Runner {
       const ran = await execute(this.binary, runArgs, Math.ceil(wallTimeSec * 1000) + 10_000);
       if (isMissingBinary(ran.error)) return errorResult('Sandbox (isolate) unavailable');
       const meta = parseMeta(await readFile(metaPath, 'utf8').catch(() => ''));
-      const outputLimitBytes = outputLimitKb * 1024;
-      const stdout = await readCapped(path.join(boxDir, 'box', 'stdout.txt'), outputLimitBytes);
-      const stderr = await readCapped(path.join(boxDir, 'box', 'stderr.txt'), outputLimitBytes);
+      const stdout = await readCapped(path.join(boxDir, 'box', 'stdout.txt'), maxOutputBytes);
+      const stderr = await readCapped(path.join(boxDir, 'box', 'stderr.txt'), maxOutputBytes);
       const exitValue = Number(meta.exitcode);
       const exitCode = Number.isFinite(exitValue) ? exitValue : null;
+      const outputLimitExceeded = isOutputLimitExceeded(meta, stderr.text);
       let status: RunResult['status'] = 'ok';
       if (meta['cg-oom-killed'] === '1') status = 'memory';
+      else if (outputLimitExceeded) status = 'runtime_error';
       else if (meta.status === 'TO' || meta.killed === '1') status = 'timeout';
       else if (meta.status === 'XX' || !Object.keys(meta).length || (meta.status === undefined && exitCode === null)) status = 'error';
       else if (meta.status === 'RE' || meta.status === 'SG' || (exitCode !== null && exitCode !== 0)) status = 'runtime_error';
+      const stderrText = [stderr.text, outputLimitExceeded ? 'output limit exceeded' : ''].filter(Boolean).join('\n');
       result = {
         status,
         stdout: stdout.text,
-        stderr: stderr.text || (status === 'error' ? ran.stderr : ''),
+        stderr: stderrText || (status === 'error' ? ran.stderr : ''),
         compileOutput: '',
         timeMs: readTime(meta),
         memoryKb: Number.isFinite(Number(meta['cg-mem'])) ? Number(meta['cg-mem']) : null,

@@ -53,6 +53,7 @@ export interface GameConfig {
   maxConcurrentRuns: number;
   isolateBoxBase: number;
   outputLimitKb: number;
+  maxOutputMb: number;
   submissionCooldownSeconds: number;
   maxSubmissionsPerProblem: number | null;
   showScoreboardToClients: boolean;

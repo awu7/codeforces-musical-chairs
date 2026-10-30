@@ -12,6 +12,7 @@ cd ../server && npm install && ADMIN_PASSWORD=secret DATA_DIR=../data npm start 
 - Client: `/` (enter a seat code). Admin: `/admin`. Scoreboard: `/scoreboard`.
 - Development: run `npm run dev` in both `server/` and `web/` (Vite on :5173 proxies to :3001).
 - Run and local sample/test judging compile and execute contestant code only inside `ioi/isolate`; they do not require a Codeforces account. Codeforces statement fetching and forwarded submissions use Chrome with CDP (default `http://localhost:29229`, configurable in Judge & languages).
+- `outputLimitKb` limits output shown to Run clients; `maxOutputMb` controls the sandbox's file-size limit and the full output available to local judging.
 - Tests: `cd server && npx tsc --noEmit && npm run test:e2e && npx tsx test/isolate.ts && npx tsx test/cf-rate-limit.ts`.
 
 See `docs/PROTOCOL.md` for the API and game rules.
