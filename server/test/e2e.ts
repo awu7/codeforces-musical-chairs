@@ -107,6 +107,15 @@ function submit(socket: Socket, slotId: string, code: string): Promise<{ ok: boo
   });
 }
 
+function updateSlot(
+  socket: Socket,
+  payload: { slotId: string; lang?: string; code?: string; input?: string; attemptStartedAt?: number | null },
+): Promise<{ ok: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    socket.emit('slot:update', payload, resolve);
+  });
+}
+
 async function waitForSubmission(base: string, token: string, id: string): Promise<{ verdict: string | null; status: string }> {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
@@ -364,6 +373,136 @@ async function testTeamLazyModeMigration(): Promise<void> {
   }
 }
 
+async function testSlotUpdateAttemptGuards(): Promise<void> {
+  const runScenario = async (lazyMode: boolean, maxRoundsPerProblem: number, size: number): Promise<void> => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-slot-update-e2e-'));
+    let backend: Backend | null = null;
+    let socket: Socket | null = null;
+    try {
+      backend = await createBackend({ dataDir, runner: fakeRunner });
+      const port = await backend.listen(0, '127.0.0.1');
+      const base = `http://127.0.0.1:${port}`;
+      const login = await request<{ token: string }>(base, '/api/admin/login', 'POST', {
+        password: process.env.ADMIN_PASSWORD ?? 'admin',
+      });
+      const token = login.token;
+      await request(base, '/api/admin/config', 'PUT', {
+        autoAdvance: true,
+        judgeMode: 'manual',
+        lazyMode,
+        lazyTransitionSeconds: 0,
+        maxRoundsPerProblem,
+        roundMinutes: 10,
+        transitionSeconds: 0,
+        uniqueness: 'team',
+      }, token);
+      const team = await request<Team>(base, '/api/admin/teams', 'POST', {
+        name: lazyMode ? 'Lazy flush' : 'Physical flush',
+        size,
+      }, token);
+      for (const id of ['ROT-A', 'ROT-B', 'ROT-C']) {
+        await request(base, '/api/admin/problems/manual', 'POST', {
+          id,
+          name: id,
+          rating: 800,
+          samples: [],
+        }, token);
+      }
+      const connected = await connectSeat(base, team.seats[0]!.code);
+      socket = connected.socket;
+      await request(base, '/api/admin/game/start', 'POST', {}, token);
+      const initial = await waitForView(socket, (view) =>
+        view.clock.phase === 'running' && view.slot.attemptStartedAt !== null && view.slot.problem !== null);
+      const slotId = initial.slot.id;
+      const oldAttemptStartedAt = initial.slot.attemptStartedAt!;
+      const oldProblemId = initial.slot.problem!.id;
+
+      if (!lazyMode) {
+        const oldCode = 'old problem code';
+        const initialUpdate = await updateSlot(socket, {
+          slotId,
+          lang: 'cpp20',
+          code: oldCode,
+          input: 'old problem input',
+          attemptStartedAt: oldAttemptStartedAt,
+        });
+        assert.deepEqual(initialUpdate, { ok: true }, 'the active attempt accepts its edits');
+        assert.equal(backend.store.state.teams[0]?.slots[0]?.code.cpp20, oldCode);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await request(base, '/api/admin/game/next-round', 'POST', {}, token);
+
+      if (!lazyMode) {
+        const rotated = await waitForView(socket, (view) =>
+          view.clock.phase === 'running'
+          && view.slot.id === slotId
+          && view.slot.attemptStartedAt !== null
+          && view.slot.attemptStartedAt !== oldAttemptStartedAt);
+        const slot = backend.engine.findSlot(slotId)!.slot;
+        const newAttempt = backend.engine.activeAttempt(slot);
+        assert.ok(newAttempt);
+        assert.equal(newAttempt.outcome, 'active');
+        assert.notEqual(newAttempt.problemId, oldProblemId, 'expiration draws a new problem');
+        const template = backend.store.state.languages.find((language) => language.id === 'cpp20')!.template;
+        assert.equal(slot.code.cpp20, template, 'rotation resets code to the new problem template');
+
+        const stale = await updateSlot(socket, {
+          slotId,
+          lang: 'py3',
+          code: 'stale code',
+          input: 'stale input',
+          attemptStartedAt: oldAttemptStartedAt,
+        });
+        assert.deepEqual(stale, { ok: false, error: 'Problem changed' });
+        assert.equal(slot.lang, 'cpp20', 'stale language changes are rejected');
+        assert.equal(slot.code.cpp20, template, 'stale code is rejected');
+        assert.equal(slot.input, '', 'stale input is rejected');
+
+        const current = await updateSlot(socket, {
+          slotId,
+          lang: 'py3',
+          code: 'current code',
+          input: 'current input',
+          attemptStartedAt: rotated.slot.attemptStartedAt,
+        });
+        assert.deepEqual(current, { ok: true }, 'the current attempt accepts its edits');
+        assert.equal(slot.lang, 'py3');
+        assert.equal(slot.code.py3, 'current code');
+        assert.equal(slot.input, 'current input');
+      } else {
+        const slot = backend.engine.findSlot(slotId)!.slot;
+        const attempt = backend.engine.activeAttempt(slot);
+        assert.ok(attempt);
+        assert.equal(attempt.startedAt, oldAttemptStartedAt, 'lazy rotation keeps the same attempt');
+        assert.equal(slot.seatIndex, 1, 'lazy rotation moves the slot away from its old seat');
+        const lateFlush = await updateSlot(socket, {
+          slotId,
+          lang: 'cpp20',
+          code: 'late lazy code',
+          input: 'late lazy input',
+          attemptStartedAt: oldAttemptStartedAt,
+        });
+        assert.deepEqual(lateFlush, { ok: true }, 'a matching late lazy flush remains accepted');
+        assert.equal(slot.code.cpp20, 'late lazy code');
+        assert.equal(slot.input, 'late lazy input');
+      }
+    } finally {
+      if (socket) {
+        socket.disconnect();
+        latestViews.delete(socket);
+        const index = sockets.indexOf(socket);
+        if (index >= 0) sockets.splice(index, 1);
+      }
+      if (backend) await backend.close();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  };
+
+  await runScenario(false, 1, 1);
+  await runScenario(true, 2, 2);
+}
+
 async function run(): Promise<void> {
   testSpecialAnswerComparison();
   const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-e2e-'));
@@ -606,7 +745,8 @@ async function run(): Promise<void> {
     await testProblemMetadataMigration();
     await testOrderedDifficulty();
     await testTeamLazyModeMigration();
-    console.log('E2E PASS: auth, teams/seats, local disk tests/needs-checker metadata/rescan/migration/draw, sample fallback, lazy rotation, expiry, pause/resume, restart persistence, defaults migration, self-submit polling');
+    await testSlotUpdateAttemptGuards();
+    console.log('E2E PASS: auth, teams/seats, local disk tests/needs-checker metadata/rescan/migration/draw, sample fallback, stale slot-update rejection, lazy late flush, lazy rotation, expiry, pause/resume, restart persistence, defaults migration, self-submit polling');
   } finally {
     for (const socket of sockets) socket.disconnect();
     if (backend) await backend.close();

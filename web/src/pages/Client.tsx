@@ -189,11 +189,15 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
     if (p.code)
       for (const [l, c] of Object.entries(p.code)) {
         remember(sent.current.code[l] ??= new Set(), c);
-        sends.push(emitAck(socket, 'slot:update', { slotId: sid, lang: l, code: c }, 5000).catch(() => {}));
+        sends.push(emitAck(socket, 'slot:update', {
+          slotId: sid, lang: l, code: c, attemptStartedAt: attemptRef.current,
+        }, 5000).catch(() => {}));
       }
     if (p.input !== undefined || p.lang !== undefined) {
       if (p.input !== undefined) remember(sent.current.input, p.input);
-      sends.push(emitAck(socket, 'slot:update', { slotId: sid, lang: p.lang, input: p.input }, 5000).catch(() => {}));
+      sends.push(emitAck(socket, 'slot:update', {
+        slotId: sid, lang: p.lang, input: p.input, attemptStartedAt: attemptRef.current,
+      }, 5000).catch(() => {}));
     }
     return Promise.all(sends);
   }, [socket]);

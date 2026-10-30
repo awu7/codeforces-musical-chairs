@@ -189,9 +189,20 @@ export function createSocketServer(deps: SocketDependencies): Server {
     socket.on('slot:update', (payload: unknown, ack?: Ack) => {
       const identity = joined.get(socket.id);
       if (!identity) { ack?.({ ok: false, error: 'Join a seat first' }); return; }
-      const data = (payload ?? {}) as { slotId?: string; lang?: string; code?: string; input?: string };
+      const data = (payload ?? {}) as {
+        slotId?: string;
+        lang?: string;
+        code?: string;
+        input?: string;
+        attemptStartedAt?: number | null;
+      };
       const found = data.slotId ? engine.findSlot(data.slotId) : undefined;
       if (!found || found.team.id !== identity.teamId) { ack?.({ ok: false, error: 'Slot not found for this team' }); return; }
+      if (data.attemptStartedAt !== undefined
+        && data.attemptStartedAt !== (engine.activeAttempt(found.slot)?.startedAt ?? null)) {
+        ack?.({ ok: false, error: 'Problem changed' });
+        return;
+      }
       const currentSeat = found.slot.seatIndex === identity.seatIndex;
       if (!currentSeat && !engine.acceptsLateFlush(found.slot.id, identity.seatIndex)) {
         ack?.({ ok: false, error: 'Slot is no longer at this seat' });
