@@ -155,36 +155,48 @@ export default function SettingsTab() {
         </div>
       ))}
       <div className="section">
-        <h3>Dynamic difficulty</h3>
-        <div className="form-grid">
-          {DIFF.map((f) => (
-            <Input key={String(f.k)} f={f} v={c.difficulty[f.k]} set={(v) => setD(f.k, v)} />
-          ))}
-        </div>
-        <div className="col" style={{ marginTop: 12, maxWidth: 520 }}>
-          <div className="row">
-            <b>Solve-time rules</b>
-            <span className="hint">first matching row wins; minutes = active time the problem was open</span>
-            <button className="small" onClick={() => setRules([...rules, { maxMinutes: 30, delta: 0 }])}>
-              + rule
-            </button>
+        <h3>Difficulty</h3>
+        <label className="field">
+          Problem order
+          <select value={c.difficultyMode} onChange={(e) => set('difficultyMode', e.target.value)}>
+            <option value="dynamic">Dynamic (rating adjusts)</option>
+            <option value="ordered">Fixed order (ascending rating)</option>
+          </select>
+        </label>
+        {c.difficultyMode === 'ordered' && (
+          <div className="hint">Dynamic-rating fields are unused in fixed-order mode.</div>
+        )}
+        <fieldset disabled={c.difficultyMode === 'ordered'} style={{ border: 0, padding: 0, margin: 0, opacity: c.difficultyMode === 'ordered' ? 0.5 : 1 }}>
+          <div className="form-grid">
+            {DIFF.map((f) => (
+              <Input key={String(f.k)} f={f} v={c.difficulty[f.k]} set={(v) => setD(f.k, v)} />
+            ))}
           </div>
-          {rules.map((r, i) => (
-            <div key={i} className="row">
-              solved within
-              <input style={{ width: 70 }} value={r.maxMinutes} onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, maxMinutes: e.target.value as unknown as number } : x)))} />
-              min → rating
-              <input style={{ width: 70 }} value={r.delta} onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, delta: e.target.value as unknown as number } : x)))} />
-              <button className="small danger" onClick={() => setRules(rules.filter((_, j) => j !== i))}>
-                ×
+          <div className="col" style={{ marginTop: 12, maxWidth: 520 }}>
+            <div className="row">
+              <b>Solve-time rules</b>
+              <span className="hint">first matching row wins; minutes = active time the problem was open</span>
+              <button className="small" onClick={() => setRules([...rules, { maxMinutes: 30, delta: 0 }])}>
+                + rule
               </button>
             </div>
-          ))}
-          <div className="hint">
-            Example: solved in {rules[0]?.maxMinutes ?? '?'} min → {rules[0] ? (rules[0].delta >= 0 ? '+' : '') + rules[0].delta : '?'}; slower → {c.difficulty.slowSolveDelta}; not solved after the
-            rotation limit → {c.difficulty.unsolvedDelta}.
+            {rules.map((r, i) => (
+              <div key={i} className="row">
+                solved within
+                <input style={{ width: 70 }} value={r.maxMinutes} onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, maxMinutes: e.target.value as unknown as number } : x)))} />
+                min → rating
+                <input style={{ width: 70 }} value={r.delta} onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, delta: e.target.value as unknown as number } : x)))} />
+                <button className="small danger" onClick={() => setRules(rules.filter((_, j) => j !== i))}>
+                  ×
+                </button>
+              </div>
+            ))}
+            <div className="hint">
+              Example: solved in {rules[0]?.maxMinutes ?? '?'} min → {rules[0] ? (rules[0].delta >= 0 ? '+' : '') + rules[0].delta : '?'}; slower → {c.difficulty.slowSolveDelta}; not solved after the
+              rotation limit → {c.difficulty.unsolvedDelta}.
+            </div>
           </div>
-        </div>
+        </fieldset>
       </div>
     </div>
   );

@@ -538,7 +538,11 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
               )}
             </>
           ) : (
-            <div className="center-fill muted">No problem assigned to this computer yet.</div>
+            <div className="center-fill muted">
+              {view.config.difficultyMode === 'ordered'
+                ? 'No more problems — well done!'
+                : 'No problem assigned to this computer yet.'}
+            </div>
           )}
         </section>
 

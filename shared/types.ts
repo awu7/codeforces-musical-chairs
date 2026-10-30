@@ -2,6 +2,7 @@
 
 export type Phase = 'setup' | 'running' | 'paused' | 'transition' | 'finished';
 export type JudgeMode = 'codeforces' | 'cf_self' | 'local' | 'manual' | 'auto-accept';
+export type DifficultyMode = 'dynamic' | 'ordered';
 export type AttemptOutcome = 'active' | 'solved' | 'expired' | 'skipped';
 
 export interface Language {
@@ -42,6 +43,7 @@ export interface GameConfig {
   totalRounds: number | null;      // auto-finish after this many rounds; null = unlimited
   autoAdvance: boolean;            // false = after transition, wait for admin to start next round
   judgeMode: JudgeMode;
+  difficultyMode: DifficultyMode;
   difficulty: DifficultyConfig;
   uniqueness: 'team' | 'global';   // never reuse a problem within a team / across all teams
   scoring: 'count' | 'rating';
@@ -242,7 +244,7 @@ export interface SeatView {
   clock: GameClock;
   lock: LockInfo | null;
   announcement: string | null;
-  config: Pick<GameConfig, 'allowLocalRun' | 'allowSampleLoad' | 'allowLanguageSwitch' | 'clientEditorFontSize' | 'showRoundsLeftToClients' | 'showScoreboardToClients' | 'submissionCooldownSeconds' | 'judgeMode' | 'selfSubmitClientPolling' | 'selfSubmitGraceSeconds'>;
+  config: Pick<GameConfig, 'allowLocalRun' | 'allowSampleLoad' | 'allowLanguageSwitch' | 'clientEditorFontSize' | 'showRoundsLeftToClients' | 'showScoreboardToClients' | 'submissionCooldownSeconds' | 'judgeMode' | 'difficultyMode' | 'selfSubmitClientPolling' | 'selfSubmitGraceSeconds'>;
   languages: Pick<Language, 'id' | 'name' | 'monaco'>[];
   slot: {
     id: string;

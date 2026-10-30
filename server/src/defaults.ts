@@ -11,6 +11,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   totalRounds: null,
   autoAdvance: true,
   judgeMode: 'local',
+  difficultyMode: 'dynamic',
   difficulty: {
     startRating: 800,
     minRating: 800,

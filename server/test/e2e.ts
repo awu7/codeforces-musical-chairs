@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { io as connectSocket, type Socket } from 'socket.io-client';
-import type { Attempt, RunResult, SeatView, Team } from '../../shared/types.js';
+import type { Attempt, Problem, RunResult, SeatView, Team } from '../../shared/types.js';
 import { DEFAULT_LANGUAGES } from '../src/defaults.js';
 import { createBackend, type Backend } from '../src/index.js';
 import type { Runner } from '../src/isolate.js';
@@ -114,6 +114,82 @@ async function waitForPhase(
   )));
 }
 
+async function testOrderedDifficulty(): Promise<void> {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-ordered-e2e-'));
+  let backend: Backend | null = null;
+  try {
+    backend = await createBackend({ dataDir, runner: fakeRunner });
+    const { store, engine } = backend;
+    store.state.config.difficultyMode = 'ordered';
+    store.state.config.uniqueness = 'global';
+    const firstTeam = engine.createTeam('Ordered One', 2);
+    const secondTeam = engine.createTeam('Ordered Two', 2);
+    const trio = engine.createTeam('Ordered Trio', 3);
+    const ratings = [1200, 800, 1000, 800];
+    for (const [index, rating] of ratings.entries()) {
+      const id = `ORDERED-${index + 1}`;
+      const problem: Problem = {
+        id,
+        contestId: 0,
+        index: id,
+        name: id,
+        rating,
+        cfRating: null,
+        tags: [],
+        enabled: true,
+        source: 'manual',
+        statementHtml: null,
+        timeLimit: null,
+        memoryLimit: null,
+        samples: [],
+        extraTests: [],
+        fetchStatus: 'none',
+        fetchError: null,
+        fetchedAt: null,
+      };
+      store.state.problems.push(problem);
+    }
+
+    engine.start();
+    const problemAt = (team: Team, slotIndex: number): string | undefined => {
+      const attempt = engine.activeAttempt(team.slots[slotIndex]!);
+      return attempt && store.state.problems.find((problem) => problem.id === attempt.problemId)?.id;
+    };
+    assert.deepEqual(firstTeam.slots.map((_, index) => problemAt(firstTeam, index)), ['ORDERED-2', 'ORDERED-4']);
+    assert.deepEqual(secondTeam.slots.map((_, index) => problemAt(secondTeam, index)), ['ORDERED-2', 'ORDERED-4']);
+    assert.deepEqual(trio.slots.map((_, index) => problemAt(trio, index)), ['ORDERED-2', 'ORDERED-4', 'ORDERED-3']);
+
+    const firstSlot = firstTeam.slots[0]!;
+    const secondSlot = firstTeam.slots[1]!;
+    engine.solve(firstSlot, 0);
+    assert.equal(problemAt(firstTeam, 0), 'ORDERED-3', 'solving should draw the next rating');
+    const expiring = engine.activeAttempt(secondSlot)!;
+    engine.finishAttempt(expiring, 'expired');
+    engine.drawReplacement(firstTeam, secondSlot);
+    assert.equal(problemAt(firstTeam, 1), 'ORDERED-1', 'expiry replacement should continue ascending order');
+    engine.solve(firstSlot, 0);
+    assert.equal(firstSlot.attemptId, null, 'the team should exhaust its ordered pool');
+    engine.retryEmptySlots();
+    engine.retryEmptySlots();
+    assert.equal(
+      store.state.log.filter((entry) => entry.msg.includes(`No more problems — well done! (${firstTeam.name}, slot ${firstSlot.id})`)).length,
+      1,
+      'ordered exhaustion should be logged once per slot',
+    );
+
+    const adminRedrawSlot = secondTeam.slots[0]!;
+    engine.finishAttempt(engine.activeAttempt(adminRedrawSlot)!, 'skipped');
+    engine.drawReplacement(secondTeam, adminRedrawSlot, undefined, 1200);
+    assert.equal(problemAt(secondTeam, 0), 'ORDERED-3', 'ordered admin redraw should ignore rating overrides');
+    engine.finishAttempt(engine.activeAttempt(adminRedrawSlot)!, 'skipped');
+    engine.drawReplacement(secondTeam, adminRedrawSlot, 'ORDERED-1');
+    assert.equal(problemAt(secondTeam, 0), 'ORDERED-1', 'explicit admin problem choice should be honoured');
+  } finally {
+    if (backend) await backend.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+}
+
 async function run(): Promise<void> {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-e2e-'));
   let backend: Backend | null = null;
@@ -129,6 +205,7 @@ async function run(): Promise<void> {
     assert.equal(backend.store.state.config.runMemoryMb, 256);
     assert.equal(backend.store.state.config.compileTimeLimitMs, 15000);
     assert.equal(backend.store.state.config.maxOutputMb, 64);
+    assert.equal(backend.store.state.config.difficultyMode, 'dynamic');
     assert.equal(backend.store.state.config.selfSubmitPollSeconds, 5);
     assert.equal(backend.store.state.config.selfSubmitColdPollSeconds, 60);
     assert.equal(backend.store.state.config.selfSubmitHotMinutes, 5);
@@ -318,6 +395,7 @@ async function run(): Promise<void> {
     await backend.close();
     backend = null;
     await runSelfSubmitE2e();
+    await testOrderedDifficulty();
     console.log('E2E PASS: auth, teams/seats, distinct draw, local accept/reject, injected run, physical/lazy rotation, expiry, pause/resume, restart persistence, defaults migration, self-submit polling');
   } finally {
     for (const socket of sockets) socket.disconnect();

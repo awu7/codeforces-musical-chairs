@@ -33,6 +33,7 @@ export class GameEngine {
   private lastAccountedAt = Date.now();
   private onChange: (() => void) | null = null;
   private readonly lateFlushSeats = new Map<string, { seatIndex: number; until: number }>();
+  private readonly noProblemLoggedSlots = new Set<string>();
 
   constructor(readonly store: Store) {}
 
@@ -348,6 +349,30 @@ export class GameEngine {
   private drawForSlot(team: Team, slot: Slot, startRound: number): void {
     const state = this.store.state;
     const difficulty = state.config.difficulty;
+    if (state.config.difficultyMode === 'ordered') {
+      const attemptedProblems = new Set(state.attempts
+        .filter((attempt) => attempt.teamId === team.id)
+        .map((attempt) => attempt.problemId));
+      const activeElsewhere = new Set(state.attempts
+        .filter((attempt) => attempt.teamId === team.id && attempt.outcome === 'active' && attempt.slotId !== slot.id)
+        .map((attempt) => attempt.problemId));
+      const problem = state.problems
+        .map((item, poolIndex) => ({ item, poolIndex }))
+        .filter(({ item }) => item.enabled && (item.source === 'manual' || item.fetchStatus === 'ok'))
+        .sort((a, b) => a.item.rating - b.item.rating || a.poolIndex - b.poolIndex)
+        .find(({ item }) => !attemptedProblems.has(item.id) && !activeElsewhere.has(item.id))?.item;
+      if (!problem) {
+        slot.attemptId = null;
+        if (!this.noProblemLoggedSlots.has(slot.id)) {
+          this.noProblemLoggedSlots.add(slot.id);
+          this.store.log('warn', `No more problems — well done! (${team.name}, slot ${slot.id})`);
+        }
+        return;
+      }
+      this.noProblemLoggedSlots.delete(slot.id);
+      this.createAttempt(team, slot, problem, startRound);
+      return;
+    }
     const baseRating = difficulty.scope === 'team' ? team.rating : slot.nextRating;
     const target = this.roundRating(baseRating);
     const eligible = (rating: number): Problem[] => state.problems.filter((problem) => {
@@ -374,9 +399,13 @@ export class GameEngine {
     const problem = candidates.length ? candidates[Math.floor(Math.random() * candidates.length)] : undefined;
     if (!problem) {
       slot.attemptId = null;
-      this.store.log('warn', `No unused problem available for ${team.name} at rating ${target}`);
+      if (!this.noProblemLoggedSlots.has(slot.id)) {
+        this.noProblemLoggedSlots.add(slot.id);
+        this.store.log('warn', `No unused problem available for ${team.name} at rating ${target}`);
+      }
       return;
     }
+    this.noProblemLoggedSlots.delete(slot.id);
     this.createAttempt(team, slot, problem, startRound);
   }
 
@@ -400,6 +429,7 @@ export class GameEngine {
       solvedBySeat: null,
     };
     state.attempts.push(attempt);
+    this.noProblemLoggedSlots.delete(slot.id);
     slot.attemptId = attempt.id;
     slot.code = lang ? { [slot.lang]: lang.template } : {};
     slot.input = '';
@@ -484,7 +514,7 @@ export class GameEngine {
   }
 
   drawReplacement(team: Team, slot: Slot, problemId?: string, rating?: number): void {
-    if (rating !== undefined) slot.nextRating = this.roundRating(rating);
+    if (rating !== undefined && this.store.state.config.difficultyMode !== 'ordered') slot.nextRating = this.roundRating(rating);
     if (problemId) {
       const problem = this.store.state.problems.find((item) => item.id === problemId);
       if (!problem) throw new Error(`Problem ${problemId} does not exist`);
@@ -593,6 +623,7 @@ export class GameEngine {
         showScoreboardToClients: this.store.state.config.showScoreboardToClients,
         submissionCooldownSeconds: this.store.state.config.submissionCooldownSeconds,
         judgeMode: this.store.state.config.judgeMode,
+        difficultyMode: this.store.state.config.difficultyMode,
         selfSubmitClientPolling: this.store.state.config.selfSubmitClientPolling,
         selfSubmitGraceSeconds: this.store.state.config.selfSubmitGraceSeconds,
       },

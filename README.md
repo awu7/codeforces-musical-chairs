@@ -1,6 +1,6 @@
 # Codeforces Musical Chairs
 
-Team competitive-programming game: every K minutes players move to the next computer (or, in lazy mode, problems and editor state rotate between the team's computers). Solved problems are replaced immediately, and unsolved ones after N rounds. Difficulty adjusts dynamically from an admin-defined Codeforces problem pool.
+Team competitive-programming game: every K minutes players move to the next computer (or, in lazy mode, problems and editor state rotate between the team's computers). Solved problems are replaced immediately, and unsolved ones after N rounds. Problems can be drawn with dynamically adjusted difficulty or in fixed ascending-rating order, independently for each team.
 
 ## Run
 
