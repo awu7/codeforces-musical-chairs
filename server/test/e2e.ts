@@ -130,6 +130,9 @@ async function run(): Promise<void> {
     assert.equal(backend.store.state.config.compileTimeLimitMs, 15000);
     assert.equal(backend.store.state.config.maxOutputMb, 64);
     assert.equal(backend.store.state.config.selfSubmitPollSeconds, 5);
+    assert.equal(backend.store.state.config.selfSubmitColdPollSeconds, 60);
+    assert.equal(backend.store.state.config.selfSubmitHotMinutes, 5);
+    assert.equal(backend.store.state.config.selfSubmitClientPolling, false);
     assert.equal(backend.store.state.config.selfSubmitGraceSeconds, 30);
     assert.ok(backend.store.state.config.maxConcurrentRuns > 0 && backend.store.state.config.maxConcurrentRuns <= 4);
     assert.ok(backend.store.state.languages.find((language) => language.id === 'cpp20')?.compile?.length);

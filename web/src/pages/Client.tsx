@@ -1,5 +1,5 @@
 import Editor from '@monaco-editor/react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Socket } from 'socket.io-client';
 import type { RunResult, SeatView, SubmissionPublic } from '../../../shared/types';
 import { emitAck, fmtMs, makeSocket, remainingMs, serverNow, syncClock, verdictShort } from '../lib/api';
@@ -10,6 +10,20 @@ import ScoreTable from '../components/ScoreTable';
 const CODE_KEY = 'mc_seat_code';
 
 type Status = 'idle' | 'connecting' | 'joined' | 'error';
+
+interface ClientPollLoop {
+  timer: number | null;
+  expiryTimer: number | null;
+  slotId: string;
+  problemId: string;
+  contestId: number;
+  index: string;
+  attemptStartedAt: number;
+  handle: string;
+  stopAt: number;
+  intervalMs: number;
+  seenIds: Set<number>;
+}
 
 export default function ClientPage() {
   const [seatCode, setSeatCode] = useState<string | null>(() => {
@@ -136,11 +150,17 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
   const [lastSubmit, setLastSubmit] = useState(0);
   const [showBoard, setShowBoard] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [showHandleEditor, setShowHandleEditor] = useState(false);
+  const [refreshRequestedAt, setRefreshRequestedAt] = useState<number | null>(null);
+  const [clientPolling, setClientPolling] = useState(false);
 
   const pending = useRef<{ code?: Record<string, string>; input?: string; lang?: string }>({});
   const lastSent = useRef<{ code: Record<string, string>; input: string }>({ code: { ...slot.code }, input: slot.input });
   const timer = useRef<number | null>(null);
   const slotRef = useRef(slot.id);
+  const viewRef = useRef(view);
+  const clientPollRef = useRef<ClientPollLoop | null>(null);
+  viewRef.current = view;
 
   const flush = useCallback(() => {
     if (timer.current) {
@@ -220,6 +240,158 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
   }, [rem, view.clock.phase, flush]);
 
   const code = codes[lang] ?? '';
+  const stopClientPolling = useCallback(() => {
+    const active = clientPollRef.current;
+    if (active?.timer !== null && active?.timer !== undefined) window.clearTimeout(active.timer);
+    if (active?.expiryTimer !== null && active?.expiryTimer !== undefined) window.clearTimeout(active.expiryTimer);
+    clientPollRef.current = null;
+    setClientPolling(false);
+  }, []);
+
+  useEffect(() => () => {
+    const active = clientPollRef.current;
+    if (active?.timer !== null && active?.timer !== undefined) window.clearTimeout(active.timer);
+    if (active?.expiryTimer !== null && active?.expiryTimer !== undefined) window.clearTimeout(active.expiryTimer);
+    clientPollRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    const active = clientPollRef.current;
+    if (!active) return;
+    const current = viewRef.current;
+    const problem = current.slot.problem;
+    if (
+      current.config.judgeMode !== 'cf_self'
+      || !current.config.selfSubmitClientPolling
+      || current.seat.cfHandle !== active.handle
+      || current.slot.id !== active.slotId
+      || problem?.id !== active.problemId
+      || current.slot.attemptStartedAt !== active.attemptStartedAt
+    ) stopClientPolling();
+  }, [
+    view.config.judgeMode,
+    view.config.selfSubmitClientPolling,
+    view.seat.cfHandle,
+    view.slot.id,
+    view.slot.problem?.id,
+    view.slot.attemptStartedAt,
+    stopClientPolling,
+  ]);
+
+  const startClientPolling = () => {
+    const current = viewRef.current;
+    const problem = current.slot.problem;
+    const handle = current.seat.cfHandle;
+    const attemptStartedAt = current.slot.attemptStartedAt;
+    if (
+      current.config.judgeMode !== 'cf_self'
+      || !current.config.selfSubmitClientPolling
+      || !handle
+      || !problem
+      || attemptStartedAt === null
+    ) return;
+    stopClientPolling();
+    const active: ClientPollLoop = {
+      timer: null,
+      expiryTimer: null,
+      slotId: current.slot.id,
+      problemId: problem.id,
+      contestId: problem.contestId,
+      index: problem.index.toUpperCase(),
+      attemptStartedAt,
+      handle,
+      stopAt: Date.now() + 5 * 60_000,
+      intervalMs: 3000,
+      seenIds: new Set(),
+    };
+    clientPollRef.current = active;
+    setClientPolling(true);
+    active.expiryTimer = window.setTimeout(stopClientPolling, 5 * 60_000);
+
+    const stillCurrent = () => {
+      if (clientPollRef.current !== active || Date.now() >= active.stopAt) return false;
+      const latest = viewRef.current;
+      return latest.config.judgeMode === 'cf_self'
+        && latest.config.selfSubmitClientPolling
+        && latest.seat.cfHandle === active.handle
+        && latest.slot.id === active.slotId
+        && latest.slot.problem?.id === active.problemId
+        && latest.slot.attemptStartedAt === active.attemptStartedAt;
+    };
+
+    const poll = async (): Promise<void> => {
+      active.timer = null;
+      if (!stillCurrent()) {
+        if (clientPollRef.current === active) stopClientPolling();
+        return;
+      }
+      let nextDelay: number;
+      try {
+        const url = `https://codeforces.com/api/user.status?handle=${encodeURIComponent(active.handle)}&from=1&count=10`;
+        const response = await fetch(url);
+        const payload = await response.json() as { status?: string; result?: unknown };
+        if (!stillCurrent()) return;
+        if (!response.ok || payload.status !== 'OK' || !Array.isArray(payload.result)) {
+          throw new Error('Codeforces API request failed');
+        }
+        active.intervalMs = 3000;
+        const submissions = (payload.result as Array<Record<string, unknown>>).slice().sort(
+          (left, right) => Number(left.creationTimeSeconds) - Number(right.creationTimeSeconds),
+        );
+        for (const submission of submissions) {
+          if (!stillCurrent()) {
+            if (clientPollRef.current === active) stopClientPolling();
+            return;
+          }
+          const problemInfo = submission.problem as { contestId?: unknown; index?: unknown } | undefined;
+          const verdict = String(submission.verdict ?? '').toUpperCase();
+          const id = Number(submission.id);
+          const createdAt = Number(submission.creationTimeSeconds) * 1000;
+          if (
+            !Number.isSafeInteger(id)
+            || active.seenIds.has(id)
+            || Number(problemInfo?.contestId) !== active.contestId
+            || String(problemInfo?.index ?? '').toUpperCase() !== active.index
+            || !Number.isFinite(createdAt)
+            || createdAt < active.attemptStartedAt - current.config.selfSubmitGraceSeconds * 1000
+            || !verdict
+            || ['TESTING', 'QUEUED', 'RUNNING', 'SUBMITTED'].includes(verdict)
+          ) continue;
+          active.seenIds.add(id);
+          const sent = emitAck<{ ok: boolean; applied: boolean }>(socket, 'seat:cfVerdict', { submission }).catch(() => null);
+          if (verdict === 'OK') {
+            await sent;
+            if (clientPollRef.current === active) stopClientPolling();
+            return;
+          }
+          await sent;
+          if (clientPollRef.current !== active) return;
+        }
+        nextDelay = 3000 + Math.random() * 1500;
+      } catch {
+        if (clientPollRef.current !== active) return;
+        active.intervalMs = Math.min(20_000, active.intervalMs * 2);
+        nextDelay = Math.min(20_000, active.intervalMs + Math.random() * 1500);
+      }
+      if (stillCurrent()) active.timer = window.setTimeout(() => void poll(), nextDelay);
+      else if (clientPollRef.current === active) stopClientPolling();
+    };
+
+    active.timer = window.setTimeout(() => void poll(), 0);
+  };
+
+  useEffect(() => {
+    const lastPollAt = view.seat.selfSubmitStatus.lastPollAt;
+    if (refreshRequestedAt !== null && lastPollAt !== null && lastPollAt >= refreshRequestedAt) {
+      setRefreshRequestedAt(null);
+    }
+  }, [refreshRequestedAt, view.seat.selfSubmitStatus.lastPollAt]);
+  useEffect(() => {
+    if (refreshRequestedAt === null) return;
+    const timeout = window.setTimeout(() => setRefreshRequestedAt(null), 10_000);
+    return () => window.clearTimeout(timeout);
+  }, [refreshRequestedAt]);
+
   const onCode = (v: string | undefined) => {
     const c = v ?? '';
     setCodes((cur) => ({ ...cur, [lang]: c }));
@@ -274,6 +446,27 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
       setTab('submissions');
     }
   };
+  const refreshVerdicts = async () => {
+    if (refreshRequestedAt !== null) return;
+    startClientPolling();
+    try {
+      const result = await emitAck<{ ok: boolean; error?: string; refreshRequestedAt?: number }>(socket, 'seat:refreshVerdicts', {});
+      if (!result.ok) {
+        setToast(result.error ?? 'Could not check verdicts');
+        window.setTimeout(() => setToast(null), 3000);
+        return;
+      }
+      setRefreshRequestedAt(result.refreshRequestedAt ?? Date.now());
+    } catch (e) {
+      setToast(String(e));
+      window.setTimeout(() => setToast(null), 3000);
+    }
+  };
+  const submitOnCodeforces = () => {
+    socket.emit('seat:submitClicked', {}, () => {});
+    if (submitUrl) window.open(submitUrl, '_blank', 'noopener,noreferrer');
+    startClientPolling();
+  };
   const cooldownLeft = Math.max(0, lastSubmit + view.config.submissionCooldownSeconds * 1000 - Date.now());
 
   const problem = slot.problem;
@@ -295,6 +488,11 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
         {!connected && <span className="badge bad">reconnecting…</span>}
         {view.clock.lazyMode && <span className="badge">lazy mode</span>}
         <div className="spacer" />
+        {view.config.judgeMode === 'cf_self' && view.seat.cfHandle && (
+          <button className="ghost" onClick={() => setShowHandleEditor(true)}>
+            Logged in to Codeforces as {view.seat.cfHandle} (change)
+          </button>
+        )}
         {view.config.showScoreboardToClients && (
           <button className="ghost" onClick={() => setShowBoard(true)}>
             Scoreboard
@@ -362,12 +560,14 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
             {view.config.judgeMode === 'cf_self' ? (
               submitUrl ? (
                 <>
-                  {view.team.cfHandle && <span className="muted">Submit as {view.team.cfHandle}</span>}
                   <button onClick={copyCode} disabled={locked || !problem}>Copy code</button>
-                  <button className="primary" onClick={() => window.open(submitUrl, '_blank', 'noopener,noreferrer')} disabled={locked || !problem}>
+                  <button className="primary" onClick={submitOnCodeforces} disabled={locked || !problem}>
                     Submit on Codeforces ↗
                   </button>
-                  {!view.team.cfHandle && <span className="hint">Ask an admin to set your team’s Codeforces handle to track verdicts.</span>}
+                  <button onClick={refreshVerdicts} disabled={locked || !view.seat.cfHandle || refreshRequestedAt !== null}>
+                    {refreshRequestedAt !== null ? 'Checking…' : 'Check verdicts now'}
+                  </button>
+                  {clientPolling && <span className="muted" role="status">Checking Codeforces…</span>}
                 </>
               ) : problem ? (
                 <span className="hint">No Codeforces link — ask an admin</span>
@@ -443,6 +643,15 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
         {view.config.judgeMode === 'cf_self' ? "Copy code / Codeforces submit · Ctrl+' run" : "Ctrl+Enter submit · Ctrl+' run"}
       </div>
 
+      {view.config.judgeMode === 'cf_self' && (!view.seat.cfHandle || showHandleEditor) && (
+        <HandlePrompt
+          socket={socket}
+          initialHandle={view.seat.cfHandle ?? ''}
+          blocking={!view.seat.cfHandle}
+          onSaved={() => setShowHandleEditor(false)}
+          onCancel={() => setShowHandleEditor(false)}
+        />
+      )}
       {view.lock && <LockOverlay view={view} />}
       {showBoard && view.scoreboard && (
         <div className="modal-bg" onClick={() => setShowBoard(false)}>
@@ -452,6 +661,58 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function HandlePrompt({
+  socket,
+  initialHandle,
+  blocking,
+  onSaved,
+  onCancel,
+}: {
+  socket: Socket;
+  initialHandle: string;
+  blocking: boolean;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [handle, setHandle] = useState(initialHandle);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await emitAck<{ ok: boolean; error?: string }>(socket, 'seat:setHandle', { handle: handle.trim() });
+      if (result.ok) onSaved();
+      else setError(result.error ?? 'Could not save handle');
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="lock-overlay handle-prompt">
+      <form className="lock-box" onSubmit={save}>
+        <h1>{blocking ? 'Codeforces handle required' : 'Change Codeforces handle'}</h1>
+        <p>Enter the Codeforces handle you're logged in with on this computer</p>
+        <input
+          autoFocus
+          value={handle}
+          onChange={(event) => setHandle(event.target.value)}
+          placeholder="Codeforces handle"
+          maxLength={24}
+        />
+        {error && <div className="error">{error}</div>}
+        <div className="row" style={{ justifyContent: 'center', marginTop: 16 }}>
+          <button className="primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save handle'}</button>
+          {!blocking && <button type="button" onClick={onCancel}>Cancel</button>}
+        </div>
+      </form>
     </div>
   );
 }

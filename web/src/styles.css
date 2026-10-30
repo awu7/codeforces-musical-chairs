@@ -95,6 +95,7 @@ textarea { padding: 8px; resize: none; }
 .toast { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #fff; padding: 8px 16px; border-radius: 8px; z-index: 60; }
 
 .lock-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(8, 9, 12, .94); display: flex; align-items: center; justify-content: center; text-align: center; backdrop-filter: blur(4px); }
+.lock-overlay.handle-prompt { z-index: 40; }
 .lock-overlay.transition { background: rgba(20, 40, 80, .96); }
 .lock-box h1 { font-size: 44px; margin-bottom: 12px; }
 .lock-box p { font-size: 20px; color: #cfd6e2; }

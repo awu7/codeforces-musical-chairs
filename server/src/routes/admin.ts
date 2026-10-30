@@ -93,6 +93,8 @@ function makeRouter(deps: AdminDependencies): Router {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('Expected a config object');
     if (patch.roundMinutes !== undefined && !(Number(patch.roundMinutes) > 0)) throw new Error('roundMinutes must be positive');
     if (patch.selfSubmitPollSeconds !== undefined && !(Number(patch.selfSubmitPollSeconds) > 0)) throw new Error('selfSubmitPollSeconds must be positive');
+    if (patch.selfSubmitColdPollSeconds !== undefined && !(Number(patch.selfSubmitColdPollSeconds) > 0)) throw new Error('selfSubmitColdPollSeconds must be positive');
+    if (patch.selfSubmitHotMinutes !== undefined && !(Number(patch.selfSubmitHotMinutes) >= 0)) throw new Error('selfSubmitHotMinutes must be non-negative');
     if (patch.selfSubmitGraceSeconds !== undefined && !(Number(patch.selfSubmitGraceSeconds) >= 0)) throw new Error('selfSubmitGraceSeconds must be non-negative');
     const wasFrozen = store.state.config.freezeScoreboard;
     if (patch.freezeScoreboard && !wasFrozen) store.state.frozenScoreboard = engine.scoreboard();
@@ -160,7 +162,6 @@ function makeRouter(deps: AdminDependencies): Router {
     if (body.rating !== undefined) team.rating = Number(body.rating);
     if (body.startRating !== undefined) team.startRating = body.startRating === null ? null : Number(body.startRating);
     if (body.enabled !== undefined) team.enabled = Boolean(body.enabled);
-    if (body.cfHandle !== undefined) team.cfHandle = String(body.cfHandle).trim() || undefined;
     engine.changed();
     res.json(team);
   }));
@@ -186,6 +187,11 @@ function makeRouter(deps: AdminDependencies): Router {
     const seat = team.seats[index];
     if (!seat) throw new Error('Seat not found');
     seat.label = String(req.body?.label ?? '').trim() || seat.label;
+    if (req.body?.cfHandle !== undefined) {
+      const cfHandle = String(req.body.cfHandle).trim();
+      if (cfHandle && !/^[A-Za-z0-9_.-]{3,24}$/.test(cfHandle)) throw new Error('Codeforces handle must be 3–24 letters, numbers, underscores, dots, or hyphens');
+      seat.cfHandle = cfHandle || undefined;
+    }
     engine.changed();
     res.json(seat);
   }));

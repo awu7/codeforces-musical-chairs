@@ -56,6 +56,9 @@ export interface GameConfig {
   maxOutputMb: number;
   submissionCooldownSeconds: number;
   selfSubmitPollSeconds: number;
+  selfSubmitColdPollSeconds: number;
+  selfSubmitHotMinutes: number;
+  selfSubmitClientPolling: boolean;
   selfSubmitGraceSeconds: number;
   maxSubmissionsPerProblem: number | null;
   showScoreboardToClients: boolean;
@@ -112,6 +115,10 @@ export interface Seat {
   code: string;           // 6-char join code
   connected: number;      // number of connected sockets
   lastSeen: number | null;
+  cfHandle?: string;
+  selfSubmitStatus: { lastPollAt: number | null; lastError: string | null };
+  submitClickedAt: number | null;
+  refreshRequestedAt: number | null;
 }
 
 export interface Slot {
@@ -132,8 +139,6 @@ export interface Team {
   size: number;
   rating: number;                 // used when difficulty.scope === 'team'
   startRating: number | null;     // per-team override of difficulty.startRating
-  cfHandle?: string;
-  selfSubmitStatus: { lastPollAt: number | null; lastError: string | null };
   processedCfSubmissionIds: number[];
   seats: Seat[];
   slots: Slot[];                  // always `size` slots
@@ -227,16 +232,22 @@ export interface ScoreRow {
 
 export interface SeatView {
   eventName: string;
-  team: { id: string; name: string; size: number; cfHandle?: string };
-  seat: { index: number; label: string };
+  team: { id: string; name: string; size: number };
+  seat: {
+    index: number;
+    label: string;
+    cfHandle?: string;
+    selfSubmitStatus: { lastPollAt: number | null; lastError: string | null };
+  };
   clock: GameClock;
   lock: LockInfo | null;
   announcement: string | null;
-  config: Pick<GameConfig, 'allowLocalRun' | 'allowSampleLoad' | 'allowLanguageSwitch' | 'clientEditorFontSize' | 'showRoundsLeftToClients' | 'showScoreboardToClients' | 'submissionCooldownSeconds' | 'judgeMode'>;
+  config: Pick<GameConfig, 'allowLocalRun' | 'allowSampleLoad' | 'allowLanguageSwitch' | 'clientEditorFontSize' | 'showRoundsLeftToClients' | 'showScoreboardToClients' | 'submissionCooldownSeconds' | 'judgeMode' | 'selfSubmitClientPolling' | 'selfSubmitGraceSeconds'>;
   languages: Pick<Language, 'id' | 'name' | 'monaco'>[];
   slot: {
     id: string;
     problem: ProblemPublic | null;
+    attemptStartedAt: number | null;
     lang: string;
     code: Record<string, string>;
     input: string;

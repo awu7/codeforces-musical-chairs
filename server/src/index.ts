@@ -121,7 +121,7 @@ export async function createBackend(options: BackendOptions = {}): Promise<Backe
   });
 
   const httpServer = createServer(app);
-  const io = createSocketServer({ httpServer, store, engine, runner, judging, tokenValid: isTokenValid });
+  const io = createSocketServer({ httpServer, store, engine, runner, judging, selfSubmitWatcher, tokenValid: isTokenValid });
   engine.startScheduler();
   selfSubmitWatcher.start();
   const close = async () => {

@@ -9,6 +9,17 @@ export default function TeamsTab() {
   const [bulk, setBulk] = useState({ count: '4', size: '3', prefix: 'Team ' });
   const [sheet, setSheet] = useState(false);
   const setup = s.clock.phase === 'setup';
+  const handleCounts = new Map<string, { label: string; count: number }>();
+  for (const team of s.teams) {
+    for (const seat of team.seats) {
+      const handle = seat.cfHandle?.trim();
+      if (!handle) continue;
+      const key = handle.toLowerCase();
+      const current = handleCounts.get(key);
+      handleCounts.set(key, { label: current?.label ?? handle, count: (current?.count ?? 0) + 1 });
+    }
+  }
+  const duplicateHandles = [...handleCounts.values()].filter((item) => item.count > 1).map((item) => item.label);
 
   if (sheet)
     return (
@@ -63,6 +74,9 @@ export default function TeamsTab() {
         </div>
         {!setup && <div className="hint">Team sizes can only be changed during setup.</div>}
       </div>
+      {duplicateHandles.length > 0 && (
+        <div className="hint">Warning: Codeforces handles are assigned to multiple seats: {duplicateHandles.join(', ')}.</div>
+      )}
       <div className="col">
         {s.teams.map((t) => (
           <TeamRow key={t.id} t={t} setup={setup} />
@@ -78,7 +92,6 @@ function TeamRow({ t, setup }: { t: Team; setup: boolean }) {
   const [size, setSize] = useState(String(t.size));
   const [start, setStart] = useState(t.startRating == null ? '' : String(t.startRating));
   const [rating, setRating] = useState(String(t.rating));
-  const [cfHandle, setCfHandle] = useState(t.cfHandle ?? '');
   const put = (b: unknown) => act('PUT', `/teams/${t.id}`, b).catch(() => {});
   return (
     <div className="team-card">
@@ -96,28 +109,9 @@ function TeamRow({ t, setup }: { t: Team; setup: boolean }) {
           team rating
           <input style={{ width: 80 }} value={rating} onChange={(e) => setRating(e.target.value)} onBlur={() => Number(rating) !== t.rating && put({ rating: Number(rating) })} />
         </label>
-        <label className="field inline" title="Used to detect participant submissions in Self-submit mode">
-          Codeforces handle
-          <input
-            style={{ width: 130 }}
-            value={cfHandle}
-            onChange={(e) => setCfHandle(e.target.value)}
-            onBlur={() => {
-              const value = cfHandle.trim();
-              setCfHandle(value);
-              if (value !== (t.cfHandle ?? '')) put({ cfHandle: value });
-            }}
-          />
-        </label>
         <label className="field inline">
           <input type="checkbox" checked={t.enabled} onChange={(e) => put({ enabled: e.target.checked })} /> enabled
         </label>
-        {t.selfSubmitStatus.lastError && <span className="error" title="Last Codeforces API poll failed">{t.selfSubmitStatus.lastError}</span>}
-        {t.selfSubmitStatus.lastPollAt !== null && (
-          <span className="muted" title="Last Codeforces API poll">
-            CF poll {new Date(t.selfSubmitStatus.lastPollAt).toLocaleTimeString()}
-          </span>
-        )}
         <span className="spacer" />
         <button onClick={() => confirm('Regenerate seat codes? Connected clients are kicked.') && act('POST', `/teams/${t.id}/regenerate-codes`, {}).catch(() => {})}>Regenerate codes</button>
         <button className="danger" onClick={() => confirm(`Delete ${t.name}?`) && act('DELETE', `/teams/${t.id}`).catch(() => {})}>
@@ -126,22 +120,66 @@ function TeamRow({ t, setup }: { t: Team; setup: boolean }) {
       </div>
       <div className="row" style={{ marginTop: 8 }}>
         {t.seats.map((x) => (
-          <SeatLabel key={x.index} teamId={t.id} index={x.index} label={x.label} code={x.code} connected={x.connected} />
+          <SeatLabel
+            key={x.index}
+            teamId={t.id}
+            index={x.index}
+            label={x.label}
+            code={x.code}
+            connected={x.connected}
+            cfHandle={x.cfHandle ?? ''}
+            lastPollAt={x.selfSubmitStatus.lastPollAt}
+            lastError={x.selfSubmitStatus.lastError}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function SeatLabel({ teamId, index, label, code, connected }: { teamId: string; index: number; label: string; code: string; connected: number }) {
+function SeatLabel({
+  teamId,
+  index,
+  label,
+  code,
+  connected,
+  cfHandle,
+  lastPollAt,
+  lastError,
+}: {
+  teamId: string;
+  index: number;
+  label: string;
+  code: string;
+  connected: number;
+  cfHandle: string;
+  lastPollAt: number | null;
+  lastError: string | null;
+}) {
   const { act } = useAdmin();
   const [v, setV] = useState(label);
+  const [handle, setHandle] = useState(cfHandle);
   return (
-    <div className="seat" style={{ minWidth: 170 }}>
+    <div className="seat" style={{ minWidth: 210 }}>
       <div className="row">
         <span className={`dot ${connected ? 'on' : ''}`} />
         <input value={v} style={{ width: 100 }} onChange={(e) => setV(e.target.value)} onBlur={() => v !== label && act('PUT', `/teams/${teamId}/seats/${index}`, { label: v }).catch(() => {})} />
       </div>
+      <label className="field inline">
+        CF handle
+        <input
+          value={handle}
+          style={{ width: 120 }}
+          onChange={(e) => setHandle(e.target.value)}
+          onBlur={() => {
+            const value = handle.trim();
+            setHandle(value);
+            if (value !== cfHandle) act('PUT', `/teams/${teamId}/seats/${index}`, { cfHandle: value }).catch(() => {});
+          }}
+        />
+      </label>
+      {lastError && <div className="error" title="Last Codeforces API poll failed">{lastError}</div>}
+      {lastPollAt !== null && <div className="muted" title="Last Codeforces API poll">CF poll {new Date(lastPollAt).toLocaleTimeString()}</div>}
       <span className="mono" style={{ letterSpacing: 2 }}>
         {code}
       </span>

@@ -5,6 +5,7 @@ import type { RunRequest, RunResult } from '../../shared/types.js';
 import type { Runner } from './isolate.js';
 import { GameEngine } from './engine.js';
 import { JudgingService } from './judging.js';
+import type { SelfSubmitWatcher } from './judge/self-submit.js';
 import { Store } from './store.js';
 import { serializeAdminState } from './routes/admin.js';
 
@@ -14,6 +15,7 @@ interface SocketDependencies {
   engine: GameEngine;
   runner: Runner;
   judging: JudgingService;
+  selfSubmitWatcher: SelfSubmitWatcher;
   tokenValid(token: string): boolean;
 }
 
@@ -27,7 +29,7 @@ function capOutput(text: string, limitBytes: number): { text: string; truncated:
 }
 
 export function createSocketServer(deps: SocketDependencies): Server {
-  const { httpServer, store, engine, runner, judging } = deps;
+  const { httpServer, store, engine, runner, judging, selfSubmitWatcher } = deps;
   const io = new Server(httpServer, { cors: { origin: true, credentials: true } });
   const joined = new Map<string, JoinedSeat>();
   const activeRuns = new Set<string>();
@@ -111,6 +113,77 @@ export function createSocketServer(deps: SocketDependencies): Server {
       found.seat.lastSeen = Date.now();
       store.changed();
       ack?.({ ok: true, view: engine.seatView(found.team, found.seat) });
+    });
+
+    socket.on('seat:setHandle', (payload: unknown, ack?: Ack) => {
+      const identity = joined.get(socket.id);
+      if (!identity) { ack?.({ ok: false, error: 'Join a seat first' }); return; }
+      const team = store.state.teams.find((item) => item.id === identity.teamId);
+      const seat = team?.seats[identity.seatIndex];
+      if (!team || !seat) { ack?.({ ok: false, error: 'Seat not found' }); return; }
+      const handle = String((payload as { handle?: unknown })?.handle ?? '').trim();
+      if (!/^[A-Za-z0-9_.-]{3,24}$/.test(handle)) {
+        ack?.({ ok: false, error: 'Codeforces handle must be 3–24 letters, numbers, underscores, dots, or hyphens' });
+        return;
+      }
+      seat.cfHandle = handle;
+      store.changed();
+      ack?.({ ok: true, handle });
+    });
+
+    socket.on('seat:submitClicked', (_payload: unknown, ack?: Ack) => {
+      const identity = joined.get(socket.id);
+      if (!identity) { ack?.({ ok: false, error: 'Join a seat first' }); return; }
+      const team = store.state.teams.find((item) => item.id === identity.teamId);
+      const seat = team?.seats[identity.seatIndex];
+      if (!seat) { ack?.({ ok: false, error: 'Seat not found' }); return; }
+      if (store.state.config.judgeMode !== 'cf_self') {
+        ack?.({ ok: false, error: 'Self-submit mode is not active' });
+        return;
+      }
+      if (!seat.cfHandle) { ack?.({ ok: false, error: 'Set your Codeforces handle first' }); return; }
+      seat.submitClickedAt = Date.now();
+      store.changed();
+      ack?.({ ok: true, submitClickedAt: seat.submitClickedAt });
+    });
+
+    socket.on('seat:refreshVerdicts', (_payload: unknown, ack?: Ack) => {
+      const identity = joined.get(socket.id);
+      if (!identity) { ack?.({ ok: false, error: 'Join a seat first' }); return; }
+      const team = store.state.teams.find((item) => item.id === identity.teamId);
+      const seat = team?.seats[identity.seatIndex];
+      if (!team || !seat) { ack?.({ ok: false, error: 'Seat not found' }); return; }
+      if (store.state.config.judgeMode !== 'cf_self') {
+        ack?.({ ok: false, error: 'Self-submit mode is not active' });
+        return;
+      }
+      if (!seat.cfHandle) { ack?.({ ok: false, error: 'Set your Codeforces handle first' }); return; }
+      const now = Date.now();
+      if ((seat.selfSubmitStatus.lastPollAt !== null && now - seat.selfSubmitStatus.lastPollAt < 5000)
+        || (seat.refreshRequestedAt !== null && now - seat.refreshRequestedAt < 5000)) {
+        ack?.({ ok: false, error: 'Just checked — wait a few seconds' });
+        return;
+      }
+      seat.submitClickedAt = now;
+      seat.refreshRequestedAt = now;
+      store.changed();
+      ack?.({ ok: true, refreshRequestedAt: now });
+    });
+
+    socket.on('seat:cfVerdict', (payload: unknown, ack?: Ack) => {
+      const identity = joined.get(socket.id);
+      if (!identity) { ack?.({ ok: false, error: 'Join a seat first' }); return; }
+      if (!store.state.config.selfSubmitClientPolling) {
+        ack?.({ ok: false });
+        return;
+      }
+      const submission = (payload as { submission?: unknown })?.submission;
+      if (!submission || typeof submission !== 'object' || Array.isArray(submission)) {
+        ack?.({ ok: false, error: 'Expected a Codeforces submission' });
+        return;
+      }
+      const applied = selfSubmitWatcher.ingest(identity.teamId, [submission as Record<string, unknown>]) > 0;
+      ack?.({ ok: true, applied });
     });
 
     socket.on('slot:update', (payload: unknown, ack?: Ack) => {

@@ -83,6 +83,9 @@ export class GameEngine {
       code: joinCode(),
       connected: 0,
       lastSeen: null,
+      selfSubmitStatus: { lastPollAt: null, lastError: null },
+      submitClickedAt: null,
+      refreshRequestedAt: null,
     }));
     const slots: Slot[] = Array.from({ length: size }, (_, seatIndex) => {
       const slotId = newId('slot');
@@ -106,7 +109,6 @@ export class GameEngine {
       size,
       rating: initialRating,
       startRating: null,
-      selfSubmitStatus: { lastPollAt: null, lastError: null },
       processedCfSubmissionIds: [],
       seats,
       slots,
@@ -137,7 +139,16 @@ export class GameEngine {
       }
     }
     team.seats = Array.from({ length: size }, (_, index) =>
-      team.seats[index] ?? { index, label: `PC ${index + 1}`, code: joinCode(), connected: 0, lastSeen: null },
+      team.seats[index] ?? {
+        index,
+        label: `PC ${index + 1}`,
+        code: joinCode(),
+        connected: 0,
+        lastSeen: null,
+        selfSubmitStatus: { lastPollAt: null, lastError: null },
+        submitClickedAt: null,
+        refreshRequestedAt: null,
+      },
     );
     team.size = size;
     this.changed();
@@ -563,8 +574,13 @@ export class GameEngine {
     const maxRounds = Math.min(this.store.state.config.maxRoundsPerProblem ?? team.size, team.size);
     return {
       eventName: this.store.state.config.eventName,
-      team: { id: team.id, name: team.name, size: team.size, cfHandle: team.cfHandle },
-      seat: { index: seat.index, label: seat.label },
+      team: { id: team.id, name: team.name, size: team.size },
+      seat: {
+        index: seat.index,
+        label: seat.label,
+        cfHandle: seat.cfHandle,
+        selfSubmitStatus: seat.selfSubmitStatus,
+      },
       clock: this.clock(),
       lock: this.lockForSeat(),
       announcement: this.store.state.announcement,
@@ -577,11 +593,14 @@ export class GameEngine {
         showScoreboardToClients: this.store.state.config.showScoreboardToClients,
         submissionCooldownSeconds: this.store.state.config.submissionCooldownSeconds,
         judgeMode: this.store.state.config.judgeMode,
+        selfSubmitClientPolling: this.store.state.config.selfSubmitClientPolling,
+        selfSubmitGraceSeconds: this.store.state.config.selfSubmitGraceSeconds,
       },
       languages: langs.map(({ id, name, monaco }) => ({ id, name, monaco })),
       slot: {
         id: slot?.id ?? '',
         problem: problem ? this.problemPublic(problem, true) : null,
+        attemptStartedAt: attempt?.startedAt ?? null,
         lang: slot?.lang ?? '',
         code: slot?.code ?? {},
         input: slot?.input ?? '',

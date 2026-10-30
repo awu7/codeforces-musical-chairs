@@ -1,3 +1,4 @@
+import type { Attempt, Seat, Team } from '../../../shared/types.js';
 import { userStatus } from '../cf/api.js';
 import type { GameEngine } from '../engine.js';
 import type { JudgingService } from '../judging.js';
@@ -10,11 +11,20 @@ export interface SelfSubmitApi {
 const defaultApi: SelfSubmitApi = { userStatus };
 const PENDING_VERDICTS = new Set(['TESTING', 'QUEUED', 'RUNNING', 'SUBMITTED']);
 
+interface PollCandidate {
+  team: Team;
+  seat: Seat;
+  handle: string;
+  hot: boolean;
+  refreshPending: boolean;
+  lastPollAt: number | null;
+  intervalMs: number;
+}
+
 export class SelfSubmitWatcher {
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
   private stopped = true;
-  private nextTeamIndex = 0;
 
   constructor(
     private readonly store: Store,
@@ -50,28 +60,27 @@ export class SelfSubmitWatcher {
 
   private nextDelay(): number {
     if (!this.isEnabled()) return 1000;
-    const teams = this.store.state.teams;
-    const pollMs = Math.max(1, this.store.state.config.selfSubmitPollSeconds * 1000);
     const now = Date.now();
-    const nextPollAt = teams
-      .filter((team) => this.hasActiveAttempts(team) && team.enabled && Boolean(team.cfHandle?.trim()))
-      .reduce((next, team) => Math.min(next, (team.selfSubmitStatus.lastPollAt ?? 0) + pollMs), Infinity);
-    return Number.isFinite(nextPollAt) ? Math.max(25, Math.min(1000, nextPollAt - now)) : 1000;
+    const candidates = this.candidates(now);
+    if (candidates.length === 0) return 1000;
+    const nextDueAt = Math.min(...candidates.map((candidate) =>
+      candidate.refreshPending ? now : (candidate.lastPollAt ?? 0) + candidate.intervalMs,
+    ));
+    return Math.max(25, Math.min(1000, nextDueAt - now));
   }
 
   private async pollNext(): Promise<void> {
     if (this.stopped || !this.isEnabled()) return;
-    const teams = this.store.state.teams;
     const now = Date.now();
-    const pollMs = Math.max(1, this.store.state.config.selfSubmitPollSeconds * 1000);
-    for (let offset = 0; offset < teams.length; offset += 1) {
-      const index = (this.nextTeamIndex + offset) % teams.length;
-      const team = teams[index]!;
-      if (!this.isEligible(team) || now - (team.selfSubmitStatus.lastPollAt ?? 0) < pollMs) continue;
-      this.nextTeamIndex = (index + 1) % teams.length;
-      await this.pollTeam(team.id, team.cfHandle!.trim());
-      return;
-    }
+    const due = this.candidates(now)
+      .filter((candidate) => candidate.refreshPending || candidate.lastPollAt === null || now - candidate.lastPollAt >= candidate.intervalMs)
+      .sort((left, right) =>
+        Number(right.refreshPending) - Number(left.refreshPending)
+        || Number(right.hot) - Number(left.hot)
+        || (left.lastPollAt ?? 0) - (right.lastPollAt ?? 0),
+      );
+    const candidate = due[0];
+    if (candidate) await this.pollTeamHandle(candidate.team.id, candidate.handle);
   }
 
   private isEnabled(): boolean {
@@ -79,60 +88,94 @@ export class SelfSubmitWatcher {
     return config.judgeMode === 'cf_self' && (phase === 'running' || phase === 'transition' || phase === 'paused');
   }
 
-  private isEligible(team: (typeof this.store.state.teams)[number]): boolean {
-    return team.enabled && Boolean(team.cfHandle?.trim()) && this.hasActiveAttempts(team);
+  private candidates(now: number): PollCandidate[] {
+    const config = this.store.state.config;
+    const hotWindowMs = Math.max(0, config.selfSubmitHotMinutes * 60_000);
+    const hotIntervalMs = Math.max(1, config.selfSubmitPollSeconds * 1000);
+    const coldIntervalMs = Math.max(1, config.selfSubmitColdPollSeconds * 1000);
+    return this.store.state.teams.flatMap((team) => {
+      if (!team.enabled || !team.slots.some((slot) => this.engine.activeAttempt(slot))) return [];
+      return team.seats.flatMap((seat) => {
+        const handle = seat.cfHandle?.trim();
+        if (!handle) return [];
+        const clickedAt = seat.submitClickedAt;
+        const hot = clickedAt !== null && clickedAt <= now && now - clickedAt <= hotWindowMs;
+        const refreshPending = seat.refreshRequestedAt !== null
+          && (seat.selfSubmitStatus.lastPollAt === null || seat.refreshRequestedAt > seat.selfSubmitStatus.lastPollAt);
+        return [{
+          team,
+          seat,
+          handle,
+          hot,
+          refreshPending,
+          lastPollAt: seat.selfSubmitStatus.lastPollAt,
+          intervalMs: hot ? hotIntervalMs : coldIntervalMs,
+        }];
+      });
+    });
   }
 
-  private hasActiveAttempts(team: (typeof this.store.state.teams)[number]): boolean {
-    return team.slots.some((slot) => this.engine.activeAttempt(slot) !== undefined);
-  }
-
-  private async pollTeam(teamId: string, handle: string): Promise<void> {
+  private async pollTeamHandle(teamId: string, handle: string): Promise<void> {
     const team = this.store.state.teams.find((item) => item.id === teamId);
     if (!team) return;
-    team.selfSubmitStatus.lastPollAt = Date.now();
-    team.selfSubmitStatus.lastError = null;
+    const matchingSeats = () => team.seats.filter((seat) => seat.cfHandle?.trim().toLowerCase() === handle.toLowerCase());
+    const seats = matchingSeats();
+    if (seats.length === 0) return;
+    const polledAt = Date.now();
+    for (const seat of seats) {
+      seat.selfSubmitStatus.lastPollAt = polledAt;
+      seat.selfSubmitStatus.lastError = null;
+    }
     this.store.changed();
     try {
       const submissions = await this.api.userStatus(handle, 30);
       const currentTeam = this.store.state.teams.find((item) => item.id === teamId);
-      if (!currentTeam || currentTeam.cfHandle?.trim().toLowerCase() !== handle.toLowerCase() || !this.isEnabled()) return;
-      const ordered = submissions
-        .map((submission) => ({
-          submission,
-          id: Number(submission.id),
-          createdAt: Number(submission.creationTimeSeconds) * 1000,
-        }))
-        .filter((entry) => Number.isSafeInteger(entry.id) && entry.id > 0)
-        .sort((left, right) => left.createdAt - right.createdAt || left.id - right.id);
-      const processed = new Set(currentTeam.processedCfSubmissionIds);
-      let changed = false;
-      for (const entry of ordered) {
-        if (processed.has(entry.id)) continue;
-        const verdict = String(entry.submission.verdict ?? '').toUpperCase();
-        if (!verdict || PENDING_VERDICTS.has(verdict)) continue;
-        const attempt = this.matchingAttempt(currentTeam, entry.submission, entry.createdAt);
-        if (!attempt || !this.judging.recordSelfSubmittedVerdict(currentTeam, attempt, entry.submission)) continue;
-        currentTeam.processedCfSubmissionIds.push(entry.id);
-        processed.add(entry.id);
-        changed = true;
-      }
-      if (changed) currentTeam.processedCfSubmissionIds = currentTeam.processedCfSubmissionIds.slice(-500);
-      if (changed) this.store.changed();
+      if (!currentTeam || !currentTeam.enabled || !this.isEnabled()) return;
+      if (!currentTeam.seats.some((seat) => seat.cfHandle?.trim().toLowerCase() === handle.toLowerCase())) return;
+      this.ingest(teamId, submissions);
     } catch (error) {
       const currentTeam = this.store.state.teams.find((item) => item.id === teamId);
       if (!currentTeam) return;
-      currentTeam.selfSubmitStatus.lastError = (error as Error).message;
-      this.store.log('warn', `Self-submit polling failed for ${currentTeam.name}: ${currentTeam.selfSubmitStatus.lastError}`);
+      const message = (error as Error).message;
+      for (const seat of currentTeam.seats) {
+        if (seat.cfHandle?.trim().toLowerCase() === handle.toLowerCase()) seat.selfSubmitStatus.lastError = message;
+      }
+      this.store.log('warn', `Self-submit polling failed for ${currentTeam.name} (${handle}): ${message}`);
       this.store.changed();
     }
   }
 
-  private matchingAttempt(
-    team: (typeof this.store.state.teams)[number],
-    submission: Record<string, unknown>,
-    createdAt: number,
-  ) {
+  ingest(teamId: string, submissions: Array<Record<string, unknown>>): number {
+    const team = this.store.state.teams.find((item) => item.id === teamId);
+    if (!team || !team.enabled || !this.isEnabled()) return 0;
+    const ordered = submissions
+      .map((submission) => ({
+        submission,
+        id: Number(submission.id),
+        createdAt: Number(submission.creationTimeSeconds) * 1000,
+      }))
+      .filter((entry) => Number.isSafeInteger(entry.id) && entry.id > 0)
+      .sort((left, right) => left.createdAt - right.createdAt || left.id - right.id);
+    const processed = new Set(team.processedCfSubmissionIds);
+    let applied = 0;
+    for (const entry of ordered) {
+      if (processed.has(entry.id)) continue;
+      const verdict = String(entry.submission.verdict ?? '').toUpperCase();
+      if (!verdict || PENDING_VERDICTS.has(verdict)) continue;
+      const attempt = this.matchingAttempt(team, entry.submission, entry.createdAt);
+      if (!attempt || !this.judging.recordSelfSubmittedVerdict(team, attempt, entry.submission)) continue;
+      team.processedCfSubmissionIds.push(entry.id);
+      processed.add(entry.id);
+      applied += 1;
+    }
+    if (applied > 0) {
+      team.processedCfSubmissionIds = team.processedCfSubmissionIds.slice(-500);
+      this.store.changed();
+    }
+    return applied;
+  }
+
+  private matchingAttempt(team: Team, submission: Record<string, unknown>, createdAt: number): Attempt | undefined {
     const problem = submission.problem as { contestId?: unknown; index?: unknown } | undefined;
     const contestId = Number(problem?.contestId);
     const index = String(problem?.index ?? '').toUpperCase();

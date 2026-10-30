@@ -96,12 +96,24 @@ export class Store extends EventEmitter {
           processes: savedLanguage.processes ?? defaultLanguage?.processes,
         };
       });
-      const teams = parsed.teams?.map((team) => ({
-        ...team,
-        cfHandle: team.cfHandle || undefined,
-        selfSubmitStatus: team.selfSubmitStatus ?? { lastPollAt: null, lastError: null },
-        processedCfSubmissionIds: (team.processedCfSubmissionIds ?? []).slice(-500),
-      }));
+      const teams = parsed.teams?.map((team) => {
+        const legacyTeam = team as Team & { cfHandle?: string; selfSubmitStatus?: unknown };
+        const legacyHandle = legacyTeam.cfHandle?.trim() || undefined;
+        const teamFields = { ...legacyTeam };
+        delete teamFields.cfHandle;
+        delete teamFields.selfSubmitStatus;
+        return {
+          ...teamFields,
+          seats: team.seats.map((seat) => ({
+            ...seat,
+            cfHandle: seat.cfHandle?.trim() || legacyHandle,
+            selfSubmitStatus: seat.selfSubmitStatus ?? { lastPollAt: null, lastError: null },
+            submitClickedAt: seat.submitClickedAt ?? null,
+            refreshRequestedAt: seat.refreshRequestedAt ?? null,
+          })),
+          processedCfSubmissionIds: (team.processedCfSubmissionIds ?? []).slice(-500),
+        };
+      });
       this.state = {
         ...base,
         ...parsed,
