@@ -251,6 +251,7 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
     }
   };
   const doSubmit = async () => {
+    if (view.config.judgeMode === 'cf_self') return;
     await flush();
     setSubmitMsg('Submitting…');
     setTab('submissions');
@@ -262,9 +263,25 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
       setSubmitMsg(String(e));
     }
   };
+  const copyCode = async () => {
+    await flush();
+    try {
+      await navigator.clipboard.writeText(code);
+      setToast('Code copied to clipboard');
+      window.setTimeout(() => setToast(null), 2500);
+    } catch {
+      setSubmitMsg('Could not access the clipboard in this browser');
+      setTab('submissions');
+    }
+  };
   const cooldownLeft = Math.max(0, lastSubmit + view.config.submissionCooldownSeconds * 1000 - Date.now());
 
   const problem = slot.problem;
+  const submitUrl = problem && problem.contestId > 0
+    ? problem.contestId >= 100000
+      ? `https://codeforces.com/gym/${problem.contestId}/submit/${problem.index}`
+      : `https://codeforces.com/contest/${problem.contestId}/submit/${problem.index}`
+    : null;
   const roundsLeft = slot.maxRounds - slot.roundsShown;
   const solved = slot.submissions.some((s) => s.verdict === 'OK');
 
@@ -342,9 +359,24 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
                 {running ? 'Running…' : 'Run'}
               </button>
             )}
-            <button className="primary" onClick={doSubmit} disabled={locked || !problem || cooldownLeft > 0 || solved} title="Submit (Ctrl+Enter)">
-              {cooldownLeft > 0 ? `Submit (${Math.ceil(cooldownLeft / 1000)}s)` : 'Submit'}
-            </button>
+            {view.config.judgeMode === 'cf_self' ? (
+              submitUrl ? (
+                <>
+                  {view.team.cfHandle && <span className="muted">Submit as {view.team.cfHandle}</span>}
+                  <button onClick={copyCode} disabled={locked || !problem}>Copy code</button>
+                  <button className="primary" onClick={() => window.open(submitUrl, '_blank', 'noopener,noreferrer')} disabled={locked || !problem}>
+                    Submit on Codeforces ↗
+                  </button>
+                  {!view.team.cfHandle && <span className="hint">Ask an admin to set your team’s Codeforces handle to track verdicts.</span>}
+                </>
+              ) : problem ? (
+                <span className="hint">No Codeforces link — ask an admin</span>
+              ) : null
+            ) : (
+              <button className="primary" onClick={doSubmit} disabled={locked || !problem || cooldownLeft > 0 || solved} title="Submit (Ctrl+Enter)">
+                {cooldownLeft > 0 ? `Submit (${Math.ceil(cooldownLeft / 1000)}s)` : 'Submit'}
+              </button>
+            )}
           </div>
           <div className="editor-wrap">
             <Editor
@@ -408,7 +440,7 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
       <div className="ws-foot muted">
         Solved on this computer: {slot.solvedCount}
         <span className="spacer" />
-        Ctrl+Enter submit · Ctrl+' run
+        {view.config.judgeMode === 'cf_self' ? "Copy code / Codeforces submit · Ctrl+' run" : "Ctrl+Enter submit · Ctrl+' run"}
       </div>
 
       {view.lock && <LockOverlay view={view} />}

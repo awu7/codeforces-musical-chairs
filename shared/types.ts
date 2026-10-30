@@ -1,7 +1,7 @@
 // Shared contract between server and web. Type-only; no runtime code.
 
 export type Phase = 'setup' | 'running' | 'paused' | 'transition' | 'finished';
-export type JudgeMode = 'codeforces' | 'local' | 'manual' | 'auto-accept';
+export type JudgeMode = 'codeforces' | 'cf_self' | 'local' | 'manual' | 'auto-accept';
 export type AttemptOutcome = 'active' | 'solved' | 'expired' | 'skipped';
 
 export interface Language {
@@ -55,6 +55,8 @@ export interface GameConfig {
   outputLimitKb: number;
   maxOutputMb: number;
   submissionCooldownSeconds: number;
+  selfSubmitPollSeconds: number;
+  selfSubmitGraceSeconds: number;
   maxSubmissionsPerProblem: number | null;
   showScoreboardToClients: boolean;
   freezeScoreboard: boolean;
@@ -92,6 +94,8 @@ export interface Problem {
 // What clients see (no extraTests; rating/tags hidden per config)
 export interface ProblemPublic {
   id: string;
+  contestId: number;
+  index: string;
   name: string;
   url: string;
   rating: number | null;
@@ -128,6 +132,9 @@ export interface Team {
   size: number;
   rating: number;                 // used when difficulty.scope === 'team'
   startRating: number | null;     // per-team override of difficulty.startRating
+  cfHandle?: string;
+  selfSubmitStatus: { lastPollAt: number | null; lastError: string | null };
+  processedCfSubmissionIds: number[];
   seats: Seat[];
   slots: Slot[];                  // always `size` slots
   enabled: boolean;
@@ -163,6 +170,7 @@ export interface Submission {
   code: string;
   createdAt: number;
   judge: JudgeMode;
+  source: 'server' | 'self';
   status: SubmissionStatus;
   verdict: string | null;          // CF verdict strings: OK, WRONG_ANSWER, TIME_LIMIT_EXCEEDED, COMPILATION_ERROR, RUNTIME_ERROR, MEMORY_LIMIT_EXCEEDED, ...
   passedTests: number | null;
@@ -219,7 +227,7 @@ export interface ScoreRow {
 
 export interface SeatView {
   eventName: string;
-  team: { id: string; name: string; size: number };
+  team: { id: string; name: string; size: number; cfHandle?: string };
   seat: { index: number; label: string };
   clock: GameClock;
   lock: LockInfo | null;

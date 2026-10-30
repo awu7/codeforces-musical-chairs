@@ -28,10 +28,11 @@ const GROUPS: [string, Field<GameConfig>[]][] = [
   [
     'Judging & scoring',
     [
-      { k: 'judgeMode', label: 'Judge', type: 'select', opts: [['codeforces', 'Codeforces (forwarded)'], ['local', 'Local (isolate: samples + tests)'], ['manual', 'Manual (admin decides)'], ['auto-accept', 'Auto-accept (testing)']] },
+      { k: 'judgeMode', label: 'Judge', type: 'select', opts: [['codeforces', 'Codeforces (forwarded)'], ['cf_self', 'Self-submit on Codeforces (API polling)'], ['local', 'Local (isolate: samples + tests)'], ['manual', 'Manual (admin decides)'], ['auto-accept', 'Auto-accept (testing)']] },
       { k: 'scoring', label: 'Scoring', type: 'select', opts: [['rating', 'Sum of solved ratings'], ['count', 'Number solved']] },
       { k: 'wrongSubmissionPenalty', label: 'Penalty per wrong submission on a solved problem', type: 'num' },
       { k: 'submissionCooldownSeconds', label: 'Submission cooldown (s)', type: 'num' },
+      { k: 'selfSubmitPollSeconds', label: 'Self-submit polling interval (s)', type: 'num' },
       { k: 'maxSubmissionsPerProblem', label: 'Max submissions per problem (blank = unlimited)', type: 'numnull' },
     ],
   ],

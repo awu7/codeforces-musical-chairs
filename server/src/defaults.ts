@@ -38,6 +38,8 @@ export const DEFAULT_CONFIG: GameConfig = {
   outputLimitKb: 64,
   maxOutputMb: 64,
   submissionCooldownSeconds: 10,
+  selfSubmitPollSeconds: 5,
+  selfSubmitGraceSeconds: 30,
   maxSubmissionsPerProblem: null,
   showScoreboardToClients: false,
   freezeScoreboard: false,

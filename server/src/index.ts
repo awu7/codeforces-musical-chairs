@@ -8,6 +8,7 @@ import { CodeforcesBridge } from './cf/bridge.js';
 import { GameEngine } from './engine.js';
 import { IsolateRunner, type Runner } from './isolate.js';
 import { JudgingService } from './judging.js';
+import { SelfSubmitWatcher, type SelfSubmitApi } from './judge/self-submit.js';
 import { Store } from './store.js';
 import { adminRouter, serializeAdminState } from './routes/admin.js';
 import { createSocketServer } from './socket.js';
@@ -16,6 +17,7 @@ import type { Server as SocketServer } from 'socket.io';
 export interface BackendOptions {
   dataDir?: string;
   runner?: Runner;
+  selfSubmitApi?: SelfSubmitApi;
 }
 
 export interface Backend {
@@ -42,6 +44,7 @@ export async function createBackend(options: BackendOptions = {}): Promise<Backe
   const accountQueue = new AccountQueue();
   const runner = options.runner ?? new IsolateRunner(store);
   const judging = new JudgingService(store, engine, runner, bridge, accountQueue);
+  const selfSubmitWatcher = new SelfSubmitWatcher(store, engine, judging, options.selfSubmitApi);
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
@@ -120,8 +123,10 @@ export async function createBackend(options: BackendOptions = {}): Promise<Backe
   const httpServer = createServer(app);
   const io = createSocketServer({ httpServer, store, engine, runner, judging, tokenValid: isTokenValid });
   engine.startScheduler();
+  selfSubmitWatcher.start();
   const close = async () => {
     engine.stopScheduler();
+    await selfSubmitWatcher.stop();
     await new Promise<void>((resolve) => io.close(() => resolve()));
     await bridge.close();
     await store.close();

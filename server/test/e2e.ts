@@ -7,6 +7,7 @@ import type { Attempt, RunResult, SeatView, Team } from '../../shared/types.js';
 import { DEFAULT_LANGUAGES } from '../src/defaults.js';
 import { createBackend, type Backend } from '../src/index.js';
 import type { Runner } from '../src/isolate.js';
+import { runSelfSubmitE2e } from './self-submit-e2e.js';
 
 const sockets: Socket[] = [];
 const latestViews = new Map<Socket, SeatView>();
@@ -128,6 +129,8 @@ async function run(): Promise<void> {
     assert.equal(backend.store.state.config.runMemoryMb, 256);
     assert.equal(backend.store.state.config.compileTimeLimitMs, 15000);
     assert.equal(backend.store.state.config.maxOutputMb, 64);
+    assert.equal(backend.store.state.config.selfSubmitPollSeconds, 5);
+    assert.equal(backend.store.state.config.selfSubmitGraceSeconds, 30);
     assert.ok(backend.store.state.config.maxConcurrentRuns > 0 && backend.store.state.config.maxConcurrentRuns <= 4);
     assert.ok(backend.store.state.languages.find((language) => language.id === 'cpp20')?.compile?.length);
     assert.deepEqual(backend.store.state.languages.find((language) => language.id === 'py3')?.run, ['python3', '{src}']);
@@ -311,7 +314,8 @@ async function run(): Promise<void> {
     sockets.length = 0;
     await backend.close();
     backend = null;
-    console.log('E2E PASS: auth, teams/seats, distinct draw, local accept/reject, injected run, physical/lazy rotation, expiry, pause/resume, restart persistence, isolate defaults migration');
+    await runSelfSubmitE2e();
+    console.log('E2E PASS: auth, teams/seats, distinct draw, local accept/reject, injected run, physical/lazy rotation, expiry, pause/resume, restart persistence, defaults migration, self-submit polling');
   } finally {
     for (const socket of sockets) socket.disconnect();
     if (backend) await backend.close();

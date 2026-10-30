@@ -78,6 +78,7 @@ function TeamRow({ t, setup }: { t: Team; setup: boolean }) {
   const [size, setSize] = useState(String(t.size));
   const [start, setStart] = useState(t.startRating == null ? '' : String(t.startRating));
   const [rating, setRating] = useState(String(t.rating));
+  const [cfHandle, setCfHandle] = useState(t.cfHandle ?? '');
   const put = (b: unknown) => act('PUT', `/teams/${t.id}`, b).catch(() => {});
   return (
     <div className="team-card">
@@ -95,9 +96,28 @@ function TeamRow({ t, setup }: { t: Team; setup: boolean }) {
           team rating
           <input style={{ width: 80 }} value={rating} onChange={(e) => setRating(e.target.value)} onBlur={() => Number(rating) !== t.rating && put({ rating: Number(rating) })} />
         </label>
+        <label className="field inline" title="Used to detect participant submissions in Self-submit mode">
+          Codeforces handle
+          <input
+            style={{ width: 130 }}
+            value={cfHandle}
+            onChange={(e) => setCfHandle(e.target.value)}
+            onBlur={() => {
+              const value = cfHandle.trim();
+              setCfHandle(value);
+              if (value !== (t.cfHandle ?? '')) put({ cfHandle: value });
+            }}
+          />
+        </label>
         <label className="field inline">
           <input type="checkbox" checked={t.enabled} onChange={(e) => put({ enabled: e.target.checked })} /> enabled
         </label>
+        {t.selfSubmitStatus.lastError && <span className="error" title="Last Codeforces API poll failed">{t.selfSubmitStatus.lastError}</span>}
+        {t.selfSubmitStatus.lastPollAt !== null && (
+          <span className="muted" title="Last Codeforces API poll">
+            CF poll {new Date(t.selfSubmitStatus.lastPollAt).toLocaleTimeString()}
+          </span>
+        )}
         <span className="spacer" />
         <button onClick={() => confirm('Regenerate seat codes? Connected clients are kicked.') && act('POST', `/teams/${t.id}/regenerate-codes`, {}).catch(() => {})}>Regenerate codes</button>
         <button className="danger" onClick={() => confirm(`Delete ${t.name}?`) && act('DELETE', `/teams/${t.id}`).catch(() => {})}>

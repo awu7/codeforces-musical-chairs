@@ -96,9 +96,20 @@ export class Store extends EventEmitter {
           processes: savedLanguage.processes ?? defaultLanguage?.processes,
         };
       });
+      const teams = parsed.teams?.map((team) => ({
+        ...team,
+        cfHandle: team.cfHandle || undefined,
+        selfSubmitStatus: team.selfSubmitStatus ?? { lastPollAt: null, lastError: null },
+        processedCfSubmissionIds: (team.processedCfSubmissionIds ?? []).slice(-500),
+      }));
       this.state = {
         ...base,
         ...parsed,
+        teams: teams ?? base.teams,
+        submissions: (parsed.submissions ?? base.submissions).map((submission) => ({
+          ...submission,
+          source: submission.source ?? 'server',
+        })),
         config: {
           ...base.config,
           ...savedConfig,

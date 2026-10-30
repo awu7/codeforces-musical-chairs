@@ -100,7 +100,18 @@ export class GameEngine {
         updatedAt: Date.now(),
       };
     });
-    const team: Team = { id: teamId, name: name.trim(), size, rating: initialRating, startRating: null, seats, slots, enabled: true };
+    const team: Team = {
+      id: teamId,
+      name: name.trim(),
+      size,
+      rating: initialRating,
+      startRating: null,
+      selfSubmitStatus: { lastPollAt: null, lastError: null },
+      processedCfSubmissionIds: [],
+      seats,
+      slots,
+      enabled: true,
+    };
     state.teams.push(team);
     this.store.log('info', `Created team ${team.name}`);
     this.changed();
@@ -484,6 +495,8 @@ export class GameEngine {
     const config = this.store.state.config;
     return {
       id: problem.id,
+      contestId: problem.contestId,
+      index: problem.index,
       name: problem.name,
       url: problem.contestId <= 0 ? '' : problem.contestId >= 100000
         ? `https://codeforces.com/gym/${problem.contestId}/problem/${problem.index}`
@@ -550,7 +563,7 @@ export class GameEngine {
     const maxRounds = Math.min(this.store.state.config.maxRoundsPerProblem ?? team.size, team.size);
     return {
       eventName: this.store.state.config.eventName,
-      team: { id: team.id, name: team.name, size: team.size },
+      team: { id: team.id, name: team.name, size: team.size, cfHandle: team.cfHandle },
       seat: { index: seat.index, label: seat.label },
       clock: this.clock(),
       lock: this.lockForSeat(),

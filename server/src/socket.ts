@@ -191,6 +191,10 @@ export function createSocketServer(deps: SocketDependencies): Server {
       if (!identity) { ack?.({ ok: false, error: 'Join a seat first' }); return; }
       if (store.state.lock.locked) { ack?.({ ok: false, error: 'Clients are locked by admin' }); return; }
       if (store.state.phase !== 'running') { ack?.({ ok: false, error: 'Submissions are only accepted while running' }); return; }
+      if (store.state.config.judgeMode === 'cf_self') {
+        ack?.({ ok: false, error: 'Submit on Codeforces from your browser in self-submit mode' });
+        return;
+      }
       const data = (payload ?? {}) as { slotId?: string; lang?: string; code?: string };
       const found = data.slotId ? engine.findSlot(data.slotId) : undefined;
       if (!found || found.team.id !== identity.teamId || found.slot.seatIndex !== identity.seatIndex) {
@@ -225,6 +229,7 @@ export function createSocketServer(deps: SocketDependencies): Server {
         code: data.code ?? found.slot.code[langId] ?? '',
         createdAt: Date.now(),
         judge: store.state.config.judgeMode,
+        source: 'server' as const,
         status: 'queued' as const,
         verdict: null,
         passedTests: null,
