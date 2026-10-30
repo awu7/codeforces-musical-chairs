@@ -3,17 +3,19 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import express, { type Express } from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AccountQueue } from './cf/account-queue.js';
+import { CustomInvocationRunner, type Runner } from './cf/runner.js';
+import { CodeforcesBridge } from './cf/bridge.js';
 import { GameEngine } from './engine.js';
 import { JudgingService } from './judging.js';
-import { Runner } from './runner.js';
 import { Store } from './store.js';
-import { CodeforcesBridge } from './cf/bridge.js';
 import { adminRouter, serializeAdminState } from './routes/admin.js';
 import { createSocketServer } from './socket.js';
 import type { Server as SocketServer } from 'socket.io';
 
 export interface BackendOptions {
   dataDir?: string;
+  runner?: Runner;
 }
 
 export interface Backend {
@@ -36,9 +38,10 @@ export async function createBackend(options: BackendOptions = {}): Promise<Backe
   const store = new Store(options.dataDir);
   await store.load();
   const engine = new GameEngine(store);
-  const runner = new Runner();
   const bridge = new CodeforcesBridge(store);
-  const judging = new JudgingService(store, engine, runner, bridge);
+  const accountQueue = new AccountQueue();
+  const runner = options.runner ?? new CustomInvocationRunner(store, bridge, accountQueue);
+  const judging = new JudgingService(store, engine, runner, bridge, accountQueue);
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {

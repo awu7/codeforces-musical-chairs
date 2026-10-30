@@ -1,5 +1,4 @@
 import type { GameConfig, Language } from '../../shared/types.js';
-import { spawnSync } from 'node:child_process';
 
 export const DEFAULT_CONFIG: GameConfig = {
   roundMinutes: 10,
@@ -30,8 +29,6 @@ export const DEFAULT_CONFIG: GameConfig = {
   scoring: 'rating',
   wrongSubmissionPenalty: 0,
   allowLocalRun: true,
-  runTimeLimitMs: 2000,
-  runMemoryMb: 256,
   submissionCooldownSeconds: 10,
   maxSubmissionsPerProblem: null,
   showScoreboardToClients: false,
@@ -45,8 +42,6 @@ export const DEFAULT_CONFIG: GameConfig = {
   eventName: 'Musical Chairs',
 };
 
-const pypyAvailable = spawnSync('pypy3', ['--version'], { stdio: 'ignore' }).status === 0;
-
 export const DEFAULT_LANGUAGES: Language[] = [
   {
     id: 'cpp20',
@@ -54,8 +49,6 @@ export const DEFAULT_LANGUAGES: Language[] = [
     monaco: 'cpp',
     cfProgramTypeId: 89,
     srcFile: 'main.cpp',
-    compile: ['g++', '-O2', '-std=gnu++20', '-o', '{dir}/a.out', '{src}'],
-    run: ['{dir}/a.out'],
     template: '#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    \n    return 0;\n}\n',
     enabled: true,
   },
@@ -65,8 +58,6 @@ export const DEFAULT_LANGUAGES: Language[] = [
     monaco: 'cpp',
     cfProgramTypeId: 54,
     srcFile: 'main.cpp',
-    compile: ['g++', '-O2', '-std=gnu++17', '-o', '{dir}/a.out', '{src}'],
-    run: ['{dir}/a.out'],
     template: '#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    \n    return 0;\n}\n',
     enabled: true,
   },
@@ -76,7 +67,6 @@ export const DEFAULT_LANGUAGES: Language[] = [
     monaco: 'python',
     cfProgramTypeId: 31,
     srcFile: 'main.py',
-    run: ['python3', '{src}'],
     template: 'import sys\n\ndef solve():\n    data = sys.stdin.read().split()\n    \nif __name__ == "__main__":\n    solve()\n',
     enabled: true,
   },
@@ -86,9 +76,8 @@ export const DEFAULT_LANGUAGES: Language[] = [
     monaco: 'python',
     cfProgramTypeId: 70,
     srcFile: 'main.py',
-    run: ['pypy3', '{src}'],
     template: 'import sys\n\ndef solve():\n    data = sys.stdin.read().split()\n    \nif __name__ == "__main__":\n    solve()\n',
-    enabled: pypyAvailable,
+    enabled: true,
   },
   {
     id: 'java21',
@@ -96,8 +85,6 @@ export const DEFAULT_LANGUAGES: Language[] = [
     monaco: 'java',
     cfProgramTypeId: 87,
     srcFile: 'Main.java',
-    compile: ['javac', '-d', '{dir}', '{src}'],
-    run: ['java', '-Xmx{mem}m', '-cp', '{dir}', 'Main'],
     template: 'import java.io.*;\nimport java.util.*;\n\npublic class Main {\n    public static void main(String[] args) throws Exception {\n        FastScanner fs = new FastScanner(System.in);\n        \n    }\n\n    static class FastScanner {\n        private final BufferedReader br;\n        private StringTokenizer st;\n        FastScanner(InputStream in) { br = new BufferedReader(new InputStreamReader(in)); }\n        String next() throws IOException {\n            while (st == null || !st.hasMoreTokens()) {\n                String line = br.readLine();\n                if (line == null) return null;\n                st = new StringTokenizer(line);\n            }\n            return st.nextToken();\n        }\n    }\n}\n',
     enabled: true,
   },

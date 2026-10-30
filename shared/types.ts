@@ -10,8 +10,6 @@ export interface Language {
   monaco: string;           // monaco language id: "cpp" | "python" | "java" ...
   cfProgramTypeId: number;  // Codeforces programTypeId used when forwarding
   srcFile: string;          // e.g. "main.cpp", "Main.java"
-  compile?: string[];       // argv, may use {src} {dir}; omitted = interpreted
-  run: string[];            // argv, may use {src} {dir}
   template: string;         // initial editor contents
   enabled: boolean;
 }
@@ -46,8 +44,6 @@ export interface GameConfig {
   scoring: 'count' | 'rating';
   wrongSubmissionPenalty: number;  // points subtracted per rejected submission on a solved problem (0 = none)
   allowLocalRun: boolean;
-  runTimeLimitMs: number;
-  runMemoryMb: number;
   submissionCooldownSeconds: number;
   maxSubmissionsPerProblem: number | null;
   showScoreboardToClients: boolean;

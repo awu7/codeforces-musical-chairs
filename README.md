@@ -11,7 +11,8 @@ cd ../server && npm install && ADMIN_PASSWORD=secret DATA_DIR=../data npm start 
 
 - Client: `/` (enter a seat code). Admin: `/admin`. Scoreboard: `/scoreboard`.
 - Development: run `npm run dev` in both `server/` and `web/` (Vite on :5173 proxies to :3001).
-- Codeforces statement fetching and submission forwarding need Chrome with CDP (default `http://localhost:29229`, configurable in Judge & languages).
-- Tests: `cd server && npx tsc --noEmit && npm run test:e2e` (`npm run test:cf` needs CDP Chrome).
+- Run and sample-based judging use Codeforces custom invocation and require an enabled, logged-in Codeforces account configured in Admin → Judge. Contestant code is never executed on the server.
+- Codeforces statement fetching, custom invocation, and submission forwarding need Chrome with CDP (default `http://localhost:29229`, configurable in Judge & languages).
+- Tests: `cd server && npx tsc --noEmit && npm run test:e2e && npx tsx test/customtest-parse.ts` (`npm run test:cf` needs CDP Chrome).
 
 See `docs/PROTOCOL.md` for the API and game rules.

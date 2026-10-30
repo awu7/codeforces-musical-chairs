@@ -28,7 +28,7 @@ const GROUPS: [string, Field<GameConfig>[]][] = [
   [
     'Judging & scoring',
     [
-      { k: 'judgeMode', label: 'Judge', type: 'select', opts: [['codeforces', 'Codeforces (forwarded)'], ['local', 'Local (samples + extra tests)'], ['manual', 'Manual (admin decides)'], ['auto-accept', 'Auto-accept (testing)']] },
+      { k: 'judgeMode', label: 'Judge', type: 'select', opts: [['codeforces', 'Codeforces (forwarded)'], ['local', 'Samples + tests (CF custom invocation)'], ['manual', 'Manual (admin decides)'], ['auto-accept', 'Auto-accept (testing)']] },
       { k: 'scoring', label: 'Scoring', type: 'select', opts: [['rating', 'Sum of solved ratings'], ['count', 'Number solved']] },
       { k: 'wrongSubmissionPenalty', label: 'Penalty per wrong submission on a solved problem', type: 'num' },
       { k: 'submissionCooldownSeconds', label: 'Submission cooldown (s)', type: 'num' },
@@ -36,11 +36,9 @@ const GROUPS: [string, Field<GameConfig>[]][] = [
     ],
   ],
   [
-    'Local runs',
+    'Custom invocation',
     [
-      { k: 'allowLocalRun', label: 'Allow "Run" on custom input', type: 'bool' },
-      { k: 'runTimeLimitMs', label: 'Run time limit (ms)', type: 'num' },
-      { k: 'runMemoryMb', label: 'Run memory limit (MB)', type: 'num' },
+      { k: 'allowLocalRun', label: 'Allow "Run" on custom input (Codeforces)', type: 'bool' },
     ],
   ],
   [

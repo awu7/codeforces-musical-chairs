@@ -28,7 +28,7 @@ export default function JudgeTab() {
           <button onClick={() => act('POST', '/cf/bridge/restart', {}).catch(() => {})}>Restart bridge</button>
         </div>
         <div className="hint" style={{ marginTop: 4 }}>
-          Codeforces sits behind Cloudflare, so statements and submissions go through a real Chrome. Start one with <code>google-chrome --remote-debugging-port=9222</code> or let the server
+          Codeforces sits behind Cloudflare, so statements, custom invocations, and submissions go through a real Chrome. Start one with <code>google-chrome --remote-debugging-port=9222</code> or let the server
           launch it.
         </div>
       </div>
@@ -48,7 +48,7 @@ export default function JudgeTab() {
           >
             Add account
           </button>
-          <span className="hint">Accounts are used round-robin, one submission at a time each.</span>
+          <span className="hint">Accounts are used round-robin, one submission or custom invocation at a time each.</span>
         </div>
         <table className="table" style={{ marginTop: 8, maxWidth: 900 }}>
           <thead>
@@ -104,8 +104,6 @@ function Languages() {
     if (!dirty) setLs(s.languages);
   }, [s.languages, dirty]);
   const upd = (i: number, p: Partial<Language>) => (setLs(ls.map((l, j) => (j === i ? { ...l, ...p } : l))), setDirty(true));
-  const argv = (a?: string[]) => (a ? a.join(' ') : '');
-  const parse = (t: string) => (t.trim() ? t.trim().split(/\s+/) : undefined);
   return (
     <div className="section">
       <h3>Languages</h3>
@@ -115,15 +113,13 @@ function Languages() {
         </button>
         <button
           onClick={() => {
-            setLs([...ls, { id: 'new', name: 'New language', monaco: 'plaintext', cfProgramTypeId: 0, srcFile: 'main.txt', run: [], template: '', enabled: false }]);
+            setLs([...ls, { id: 'new', name: 'New language', monaco: 'plaintext', cfProgramTypeId: 0, srcFile: 'main.txt', template: '', enabled: false }]);
             setDirty(true);
           }}
         >
           + language
         </button>
-        <span className="hint">
-          Placeholders: {'{src}'} {'{dir}'} {'{mem}'}. CF program type ids are the values of the language dropdown on the Codeforces submit page.
-        </span>
+        <span className="hint">CF program type ids are the values of the language dropdown on the Codeforces submit page.</span>
       </div>
       <div className="col">
         {ls.map((l, i) => (
@@ -151,16 +147,6 @@ function Languages() {
               </label>
               <label className="field inline">
                 <input type="checkbox" checked={l.enabled} onChange={(e) => upd(i, { enabled: e.target.checked })} /> enabled
-              </label>
-            </div>
-            <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', marginTop: 8 }}>
-              <label className="field">
-                Compile command
-                <input className="mono" defaultValue={argv(l.compile)} onBlur={(e) => upd(i, { compile: parse(e.target.value) })} />
-              </label>
-              <label className="field">
-                Run command
-                <input className="mono" defaultValue={argv(l.run)} onBlur={(e) => upd(i, { run: parse(e.target.value) ?? [] })} />
               </label>
             </div>
             <label className="field" style={{ marginTop: 8 }}>

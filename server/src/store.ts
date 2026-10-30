@@ -84,16 +84,25 @@ export class Store extends EventEmitter {
     try {
       const parsed = JSON.parse(await readFile(this.file, 'utf8')) as Partial<PersistedState>;
       const base = freshState();
+      const savedConfig: Record<string, unknown> = { ...parsed.config };
+      delete savedConfig.runTimeLimitMs;
+      delete savedConfig.runMemoryMb;
+      const languages = parsed.languages?.map((language) => {
+        const savedLanguage: Record<string, unknown> = { ...language };
+        delete savedLanguage.compile;
+        delete savedLanguage.run;
+        return savedLanguage as unknown as Language;
+      });
       this.state = {
         ...base,
         ...parsed,
         config: {
           ...base.config,
-          ...parsed.config,
+          ...savedConfig,
           difficulty: { ...base.config.difficulty, ...parsed.config?.difficulty },
         },
         cfBridge: { ...base.cfBridge, ...parsed.cfBridge },
-        languages: parsed.languages ?? base.languages,
+        languages: languages ?? base.languages,
       } as PersistedState;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {

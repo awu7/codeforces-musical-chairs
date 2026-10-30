@@ -1,13 +1,29 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { io as connectSocket, type Socket } from 'socket.io-client';
-import type { Attempt, SeatView, Team } from '../../shared/types.js';
+import type { Attempt, RunResult, SeatView, Team } from '../../shared/types.js';
+import { DEFAULT_LANGUAGES } from '../src/defaults.js';
 import { createBackend, type Backend } from '../src/index.js';
+import type { Runner } from '../src/cf/runner.js';
 
 const sockets: Socket[] = [];
 const latestViews = new Map<Socket, SeatView>();
+const fakeRunner: Runner = {
+  async run(_language, code, input): Promise<RunResult> {
+    const outputs = new Map([['3 4\n', '7\n'], ['10 -2\n', '8\n']]);
+    return {
+      status: 'ok',
+      stdout: code.includes('wrong') ? 'wrong\n' : outputs.get(input) ?? '',
+      stderr: '',
+      compileOutput: '',
+      timeMs: 1,
+      exitCode: 0,
+      truncated: false,
+    };
+  },
+};
 
 async function request<T>(
   base: string,
@@ -93,11 +109,57 @@ async function waitForPhase(
   )));
 }
 
+async function testRealRunnerWithoutAccounts(): Promise<void> {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-no-cf-account-'));
+  let backend: Backend | null = null;
+  let socket: Socket | null = null;
+  try {
+    backend = await createBackend({ dataDir });
+    const port = await backend.listen(0, '127.0.0.1');
+    const base = `http://127.0.0.1:${port}`;
+    const login = await request<{ token: string }>(base, '/api/admin/login', 'POST', {
+      password: process.env.ADMIN_PASSWORD ?? 'admin',
+    });
+    const team = await request<Team>(base, '/api/admin/teams', 'POST', { name: 'No CF account', size: 1 }, login.token);
+    await request(base, '/api/admin/problems/manual', 'POST', {
+      id: 'NOACCOUNT',
+      name: 'No account run test',
+      rating: 800,
+      samples: [{ input: '1\n', output: '1\n' }],
+    }, login.token);
+    const joined = await connectSeat(base, team.seats[0]!.code);
+    socket = joined.socket;
+    await request(base, '/api/admin/game/start', 'POST', {}, login.token);
+    const view = await waitForView(socket, (item) => Boolean(item.slot.problem));
+    const result = await new Promise<RunResult>((resolve) => {
+      socket!.emit('run', { slotId: view.slot.id, lang: 'cpp20', code: 'ignored', input: '1\n' }, resolve);
+    });
+    assert.equal(result.status, 'error');
+    assert.equal(result.stderr, 'No enabled Codeforces account is configured (needed for running code)');
+  } finally {
+    socket?.disconnect();
+    if (backend) await backend.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+}
+
 async function run(): Promise<void> {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-e2e-'));
   let backend: Backend | null = null;
   try {
-    backend = await createBackend({ dataDir });
+    await writeFile(path.join(dataDir, 'state.json'), JSON.stringify({
+      config: { runTimeLimitMs: 1234, runMemoryMb: 456 },
+      languages: DEFAULT_LANGUAGES.map((language) => ({
+        ...language,
+        compile: ['old-compiler'],
+        run: ['old-runner'],
+      })),
+    }));
+    backend = await createBackend({ dataDir, runner: fakeRunner });
+    assert.equal(Object.hasOwn(backend.store.state.config, 'runTimeLimitMs'), false);
+    assert.equal(Object.hasOwn(backend.store.state.config, 'runMemoryMb'), false);
+    assert.equal(Object.hasOwn(backend.store.state.languages[0]!, 'compile'), false);
+    assert.equal(Object.hasOwn(backend.store.state.languages[0]!, 'run'), false);
     const port = await backend.listen(0, '127.0.0.1');
     let base = `http://127.0.0.1:${port}`;
     const login = await request<{ token: string }>(base, '/api/admin/login', 'POST', {
@@ -260,7 +322,13 @@ async function run(): Promise<void> {
     const afterRestartSeat = await connectSeat(base, team2.seats[0]!.code);
     await waitForView(afterRestartSeat.socket, (view) => view.clock.phase === 'running' && view.clock.round === 4, 15_000);
 
-    console.log('E2E PASS: auth, teams/seats, distinct draw, local accept/reject, run, physical/lazy rotation, expiry, pause/resume, restart persistence');
+    for (const socket of sockets) socket.disconnect();
+    sockets.length = 0;
+    await backend.close();
+    backend = null;
+    await testRealRunnerWithoutAccounts();
+
+    console.log('E2E PASS: auth, teams/seats, distinct draw, local accept/reject, injected run, no-account run error, physical/lazy rotation, expiry, pause/resume, restart persistence');
   } finally {
     for (const socket of sockets) socket.disconnect();
     if (backend) await backend.close();

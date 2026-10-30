@@ -1,5 +1,5 @@
 import type { Language, Problem, Submission } from '../../../shared/types.js';
-import { Runner, sameTokens } from '../runner.js';
+import type { Runner } from '../cf/runner.js';
 
 export interface JudgeResult {
   verdict: string;
@@ -10,8 +10,14 @@ export interface JudgeResult {
   message: string | null;
 }
 
+export function sameTokens(actual: string, expected: string): boolean {
+  const left = actual.trim().split(/\s+/).filter(Boolean);
+  const right = expected.trim().split(/\s+/).filter(Boolean);
+  return left.length === right.length && left.every((token, index) => token === right[index]);
+}
+
 export class LocalJudge {
-  constructor(private readonly runner: Runner, private readonly timeLimitMs: () => number, private readonly memoryMb: () => number) {}
+  constructor(private readonly runner: Runner) {}
 
   async judge(submission: Submission, language: Language, problem: Problem): Promise<JudgeResult> {
     const tests = [...problem.samples, ...problem.extraTests];
@@ -23,7 +29,7 @@ export class LocalJudge {
     let maxTimeMs = 0;
     for (let i = 0; i < tests.length; i += 1) {
       const test = tests[i]!;
-      const result = await this.runner.run(language, submission.code, test.input, this.timeLimitMs(), this.memoryMb());
+      const result = await this.runner.run(language, submission.code, test.input);
       maxTimeMs = Math.max(maxTimeMs, result.timeMs);
       if (result.status === 'compile_error') return {
         verdict: 'COMPILATION_ERROR', passedTests, failedTest: i + 1, timeMs: result.timeMs,
