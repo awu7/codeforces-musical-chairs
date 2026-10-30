@@ -79,7 +79,7 @@ export default function GameTab() {
             Judge
             <select value={s.config.judgeMode} onChange={(e) => act('PUT', '/config', { judgeMode: e.target.value }).catch(() => {})}>
               <option value="codeforces">Codeforces</option>
-              <option value="local">Samples + tests (CF custom invocation)</option>
+              <option value="local">Local (isolate: samples + tests)</option>
               <option value="manual">Manual</option>
               <option value="auto-accept">Auto-accept (testing)</option>
             </select>

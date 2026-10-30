@@ -12,6 +12,9 @@ export interface Language {
   srcFile: string;          // e.g. "main.cpp", "Main.java"
   template: string;         // initial editor contents
   enabled: boolean;
+  compile?: string[];
+  run: string[];
+  processes?: number;
 }
 
 export interface SolvedRule { maxMinutes: number; delta: number } // first rule with solveMinutes <= maxMinutes wins
@@ -44,6 +47,12 @@ export interface GameConfig {
   scoring: 'count' | 'rating';
   wrongSubmissionPenalty: number;  // points subtracted per rejected submission on a solved problem (0 = none)
   allowLocalRun: boolean;
+  runTimeLimitMs: number;
+  runMemoryMb: number;
+  compileTimeLimitMs: number;
+  maxConcurrentRuns: number;
+  isolateBoxBase: number;
+  outputLimitKb: number;
   submissionCooldownSeconds: number;
   maxSubmissionsPerProblem: number | null;
   showScoreboardToClients: boolean;
@@ -174,6 +183,7 @@ export interface RunResult {
   stderr: string;
   compileOutput: string;
   timeMs: number;
+  memoryKb: number | null;
   exitCode: number | null;
   truncated: boolean;
 }

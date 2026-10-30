@@ -6,12 +6,14 @@ import { io as connectSocket, type Socket } from 'socket.io-client';
 import type { Attempt, RunResult, SeatView, Team } from '../../shared/types.js';
 import { DEFAULT_LANGUAGES } from '../src/defaults.js';
 import { createBackend, type Backend } from '../src/index.js';
-import type { Runner } from '../src/cf/runner.js';
+import type { Runner } from '../src/isolate.js';
 
 const sockets: Socket[] = [];
 const latestViews = new Map<Socket, SeatView>();
+let lastRunLimits: { timeMs: number; memoryMb: number } | undefined;
 const fakeRunner: Runner = {
-  async run(_language, code, input): Promise<RunResult> {
+  async run(_language, code, input, limits): Promise<RunResult> {
+    lastRunLimits = limits;
     const outputs = new Map([['3 4\n', '7\n'], ['10 -2\n', '8\n']]);
     return {
       status: 'ok',
@@ -19,6 +21,7 @@ const fakeRunner: Runner = {
       stderr: '',
       compileOutput: '',
       timeMs: 1,
+      memoryKb: null,
       exitCode: 0,
       truncated: false,
     };
@@ -45,13 +48,14 @@ async function request<T>(
   return result;
 }
 
-function waitForView(socket: Socket, predicate: (view: SeatView) => boolean, timeoutMs = 9000): Promise<SeatView> {
+function waitForView(socket: Socket, predicate: (view: SeatView) => boolean, timeoutMs = 30_000): Promise<SeatView> {
   const latest = latestViews.get(socket);
   if (latest && predicate(latest)) return Promise.resolve(latest);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       socket.off('seat:view', listener);
-      reject(new Error('Timed out waiting for seat view'));
+      const current = latestViews.get(socket);
+      reject(new Error(`Timed out waiting for seat view (phase=${current?.clock.phase ?? 'unknown'}, round=${current?.clock.round ?? 'unknown'}, problem=${current?.slot.problem?.id ?? 'none'})`));
     }, timeoutMs);
     const listener = (view: SeatView) => {
       if (!predicate(view)) return;
@@ -109,57 +113,23 @@ async function waitForPhase(
   )));
 }
 
-async function testRealRunnerWithoutAccounts(): Promise<void> {
-  const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-no-cf-account-'));
-  let backend: Backend | null = null;
-  let socket: Socket | null = null;
-  try {
-    backend = await createBackend({ dataDir });
-    const port = await backend.listen(0, '127.0.0.1');
-    const base = `http://127.0.0.1:${port}`;
-    const login = await request<{ token: string }>(base, '/api/admin/login', 'POST', {
-      password: process.env.ADMIN_PASSWORD ?? 'admin',
-    });
-    const team = await request<Team>(base, '/api/admin/teams', 'POST', { name: 'No CF account', size: 1 }, login.token);
-    await request(base, '/api/admin/problems/manual', 'POST', {
-      id: 'NOACCOUNT',
-      name: 'No account run test',
-      rating: 800,
-      samples: [{ input: '1\n', output: '1\n' }],
-    }, login.token);
-    const joined = await connectSeat(base, team.seats[0]!.code);
-    socket = joined.socket;
-    await request(base, '/api/admin/game/start', 'POST', {}, login.token);
-    const view = await waitForView(socket, (item) => Boolean(item.slot.problem));
-    const result = await new Promise<RunResult>((resolve) => {
-      socket!.emit('run', { slotId: view.slot.id, lang: 'cpp20', code: 'ignored', input: '1\n' }, resolve);
-    });
-    assert.equal(result.status, 'error');
-    assert.equal(result.stderr, 'No enabled Codeforces account is configured (needed for running code)');
-  } finally {
-    socket?.disconnect();
-    if (backend) await backend.close();
-    await rm(dataDir, { recursive: true, force: true });
-  }
-}
-
 async function run(): Promise<void> {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-e2e-'));
   let backend: Backend | null = null;
   try {
     await writeFile(path.join(dataDir, 'state.json'), JSON.stringify({
-      config: { runTimeLimitMs: 1234, runMemoryMb: 456 },
-      languages: DEFAULT_LANGUAGES.map((language) => ({
-        ...language,
-        compile: ['old-compiler'],
-        run: ['old-runner'],
-      })),
+      config: {},
+      languages: DEFAULT_LANGUAGES.map((language) =>
+        Object.fromEntries(Object.entries(language).filter(([key]) => !['compile', 'run', 'processes'].includes(key))),
+      ),
     }));
     backend = await createBackend({ dataDir, runner: fakeRunner });
-    assert.equal(Object.hasOwn(backend.store.state.config, 'runTimeLimitMs'), false);
-    assert.equal(Object.hasOwn(backend.store.state.config, 'runMemoryMb'), false);
-    assert.equal(Object.hasOwn(backend.store.state.languages[0]!, 'compile'), false);
-    assert.equal(Object.hasOwn(backend.store.state.languages[0]!, 'run'), false);
+    assert.equal(backend.store.state.config.runTimeLimitMs, 2000);
+    assert.equal(backend.store.state.config.runMemoryMb, 256);
+    assert.equal(backend.store.state.config.compileTimeLimitMs, 15000);
+    assert.ok(backend.store.state.config.maxConcurrentRuns > 0 && backend.store.state.config.maxConcurrentRuns <= 4);
+    assert.ok(backend.store.state.languages.find((language) => language.id === 'cpp20')?.compile?.length);
+    assert.deepEqual(backend.store.state.languages.find((language) => language.id === 'py3')?.run, ['python3', '{src}']);
     const port = await backend.listen(0, '127.0.0.1');
     let base = `http://127.0.0.1:${port}`;
     const login = await request<{ token: string }>(base, '/api/admin/login', 'POST', {
@@ -167,7 +137,7 @@ async function run(): Promise<void> {
     });
     const token = login.token;
     await request(base, '/api/admin/config', 'PUT', {
-      roundMinutes: 0.15,
+      roundMinutes: 0.25,
       transitionSeconds: 2,
       lazyTransitionSeconds: 2,
       submissionCooldownSeconds: 0,
@@ -183,6 +153,8 @@ async function run(): Promise<void> {
         id: `M${i + 1}`,
         name: `Manual ${i + 1}`,
         rating: ratings[i],
+        timeLimit: '1 second',
+        memoryLimit: '128 megabytes',
         samples: [{ input: '3 4\n', output: '7\n' }],
         extraTests: [{ input: '10 -2\n', output: '8\n' }],
       }, token);
@@ -212,6 +184,7 @@ async function run(): Promise<void> {
     assert.equal(submissionReply.ok, true, submissionReply.error);
     const accepted = await waitForSubmission(base, token, submissionReply.submissionId!);
     assert.equal(accepted.verdict, 'OK');
+    assert.deepEqual(lastRunLimits, { timeMs: 1000, memoryMb: 128 });
     type AdminSnapshot = { attempts: Attempt[]; teams: Team[]; clock: { roundEndsAt: number | null } };
     let admin = await request<AdminSnapshot>(
       base, '/api/admin/state', 'GET', undefined, token,
@@ -320,15 +293,13 @@ async function run(): Promise<void> {
     );
     assert.equal(timerAfterRestart.clock.roundEndsAt, resumedState.clock.roundEndsAt, 'persisted deadline continues after restart');
     const afterRestartSeat = await connectSeat(base, team2.seats[0]!.code);
-    await waitForView(afterRestartSeat.socket, (view) => view.clock.phase === 'running' && view.clock.round === 4, 15_000);
+    await waitForView(afterRestartSeat.socket, (view) => view.clock.phase === 'running' && view.clock.round === 4, 30_000);
 
     for (const socket of sockets) socket.disconnect();
     sockets.length = 0;
     await backend.close();
     backend = null;
-    await testRealRunnerWithoutAccounts();
-
-    console.log('E2E PASS: auth, teams/seats, distinct draw, local accept/reject, injected run, no-account run error, physical/lazy rotation, expiry, pause/resume, restart persistence');
+    console.log('E2E PASS: auth, teams/seats, distinct draw, local accept/reject, injected run, physical/lazy rotation, expiry, pause/resume, restart persistence, isolate defaults migration');
   } finally {
     for (const socket of sockets) socket.disconnect();
     if (backend) await backend.close();

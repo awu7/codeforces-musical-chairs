@@ -28,7 +28,7 @@ export default function JudgeTab() {
           <button onClick={() => act('POST', '/cf/bridge/restart', {}).catch(() => {})}>Restart bridge</button>
         </div>
         <div className="hint" style={{ marginTop: 4 }}>
-          Codeforces sits behind Cloudflare, so statements, custom invocations, and submissions go through a real Chrome. Start one with <code>google-chrome --remote-debugging-port=9222</code> or let the server
+          Codeforces sits behind Cloudflare, so statements and submissions go through a real Chrome. Start one with <code>google-chrome --remote-debugging-port=9222</code> or let the server
           launch it.
         </div>
       </div>
@@ -48,7 +48,7 @@ export default function JudgeTab() {
           >
             Add account
           </button>
-          <span className="hint">Accounts are used round-robin, one submission or custom invocation at a time each.</span>
+          <span className="hint">Accounts are used round-robin for forwarded submissions.</span>
         </div>
         <table className="table" style={{ marginTop: 8, maxWidth: 900 }}>
           <thead>
@@ -113,7 +113,7 @@ function Languages() {
         </button>
         <button
           onClick={() => {
-            setLs([...ls, { id: 'new', name: 'New language', monaco: 'plaintext', cfProgramTypeId: 0, srcFile: 'main.txt', template: '', enabled: false }]);
+            setLs([...ls, { id: 'new', name: 'New language', monaco: 'plaintext', cfProgramTypeId: 0, srcFile: 'main.txt', template: '', enabled: false, run: [] }]);
             setDirty(true);
           }}
         >
@@ -153,6 +153,39 @@ function Languages() {
               Template
               <textarea className="mono" rows={5} value={l.template} onChange={(e) => upd(i, { template: e.target.value })} />
             </label>
+            <div className="form-grid" style={{ marginTop: 8 }}>
+              <label className="field">
+                Compile command (one argument per line)
+                <textarea
+                  className="mono"
+                  rows={4}
+                  value={l.compile?.join('\n') ?? ''}
+                  onChange={(e) => {
+                    const args = e.target.value.split('\n').filter(Boolean);
+                    upd(i, { compile: args.length ? args : undefined });
+                  }}
+                />
+              </label>
+              <label className="field">
+                Run command (one argument per line)
+                <textarea
+                  className="mono"
+                  rows={4}
+                  value={l.run.join('\n')}
+                  onChange={(e) => upd(i, { run: e.target.value.split('\n').filter(Boolean) })}
+                />
+              </label>
+              <label className="field">
+                Process limit
+                <input
+                  type="number"
+                  min={1}
+                  value={l.processes ?? 1}
+                  onChange={(e) => upd(i, { processes: Number(e.target.value) || 1 })}
+                />
+              </label>
+              <span className="hint">Use {'{src}'} and {'{exe}'} placeholders; compiler and run commands execute inside isolate.</span>
+            </div>
             <div className="row" style={{ marginTop: 6 }}>
               <span className="spacer" />
               <button className="small danger" onClick={() => (setLs(ls.filter((_, j) => j !== i)), setDirty(true))}>

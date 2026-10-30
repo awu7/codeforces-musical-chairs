@@ -11,8 +11,30 @@ cd ../server && npm install && ADMIN_PASSWORD=secret DATA_DIR=../data npm start 
 
 - Client: `/` (enter a seat code). Admin: `/admin`. Scoreboard: `/scoreboard`.
 - Development: run `npm run dev` in both `server/` and `web/` (Vite on :5173 proxies to :3001).
-- Run and sample-based judging use Codeforces custom invocation and require an enabled, logged-in Codeforces account configured in Admin → Judge. Contestant code is never executed on the server.
-- Codeforces statement fetching, custom invocation, and submission forwarding need Chrome with CDP (default `http://localhost:29229`, configurable in Judge & languages).
-- Tests: `cd server && npx tsc --noEmit && npm run test:e2e && npx tsx test/customtest-parse.ts` (`npm run test:cf` needs CDP Chrome).
+- Run and local sample/test judging compile and execute contestant code only inside `ioi/isolate`; they do not require a Codeforces account. Codeforces statement fetching and forwarded submissions use Chrome with CDP (default `http://localhost:29229`, configurable in Judge & languages).
+- Tests: `cd server && npx tsc --noEmit && npm run test:e2e && npx tsx test/isolate.ts && npx tsx test/cf-rate-limit.ts`.
 
 See `docs/PROTOCOL.md` for the API and game rules.
+
+## Installing isolate
+
+These commands install release v2.7 and configure the cgroup v2 keeper using the upstream systemd units:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential git libcap-dev libsystemd-dev libseccomp-dev pkg-config
+git clone --depth 1 --branch v2.7 https://github.com/ioi/isolate.git
+cd isolate
+make isolate
+sudo make install
+sudo addgroup --system isolate
+sudo adduser --system --ingroup isolate --home /nonexistent --no-create-home --disabled-login isolate
+sudo usermod --add-subuids 165536-231071 isolate
+sudo usermod --add-subgids 165536-231071 isolate
+sudo systemctl daemon-reload
+sudo systemctl enable --now isolate.service
+isolate --version
+isolate-check-environment
+```
+
+The installed `isolate.service` and `isolate.slice` delegate the cgroup v2 hierarchy under systemd. `isolate-check-environment` verifies the cgroup controllers; it can still exit nonzero for host-wide kernel tuning warnings (ASLR, transparent hugepages, or piped core dumps). On the development VM those warnings remain, while the cgroup checks pass and an `isolate --cg` smoke run succeeds. Do not disable the kernel protections merely to silence those warnings.

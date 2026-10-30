@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os';
 import type { GameConfig, Language } from '../../shared/types.js';
 
 export const DEFAULT_CONFIG: GameConfig = {
@@ -29,6 +30,12 @@ export const DEFAULT_CONFIG: GameConfig = {
   scoring: 'rating',
   wrongSubmissionPenalty: 0,
   allowLocalRun: true,
+  runTimeLimitMs: 2000,
+  runMemoryMb: 256,
+  compileTimeLimitMs: 15000,
+  maxConcurrentRuns: Math.max(1, Math.min(4, availableParallelism())),
+  isolateBoxBase: 0,
+  outputLimitKb: 64,
   submissionCooldownSeconds: 10,
   maxSubmissionsPerProblem: null,
   showScoreboardToClients: false,
@@ -51,6 +58,8 @@ export const DEFAULT_LANGUAGES: Language[] = [
     srcFile: 'main.cpp',
     template: '#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    \n    return 0;\n}\n',
     enabled: true,
+    compile: ['g++', '-std=c++20', '-O2', '-pipe', '{src}', '-o', '{exe}'],
+    run: ['./{exe}'],
   },
   {
     id: 'cpp17',
@@ -60,6 +69,19 @@ export const DEFAULT_LANGUAGES: Language[] = [
     srcFile: 'main.cpp',
     template: '#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    \n    return 0;\n}\n',
     enabled: true,
+    compile: ['g++', '-std=c++17', '-O2', '-pipe', '{src}', '-o', '{exe}'],
+    run: ['./{exe}'],
+  },
+  {
+    id: 'c',
+    name: 'C (GCC)',
+    monaco: 'c',
+    cfProgramTypeId: 43,
+    srcFile: 'main.c',
+    template: '#include <stdio.h>\n\nint main(void) {\n    return 0;\n}\n',
+    enabled: true,
+    compile: ['gcc', '-std=c17', '-O2', '-pipe', '{src}', '-o', '{exe}'],
+    run: ['./{exe}'],
   },
   {
     id: 'py3',
@@ -69,15 +91,7 @@ export const DEFAULT_LANGUAGES: Language[] = [
     srcFile: 'main.py',
     template: 'import sys\n\ndef solve():\n    data = sys.stdin.read().split()\n    \nif __name__ == "__main__":\n    solve()\n',
     enabled: true,
-  },
-  {
-    id: 'pypy3',
-    name: 'PyPy 3',
-    monaco: 'python',
-    cfProgramTypeId: 70,
-    srcFile: 'main.py',
-    template: 'import sys\n\ndef solve():\n    data = sys.stdin.read().split()\n    \nif __name__ == "__main__":\n    solve()\n',
-    enabled: true,
+    run: ['python3', '{src}'],
   },
   {
     id: 'java21',
@@ -87,5 +101,8 @@ export const DEFAULT_LANGUAGES: Language[] = [
     srcFile: 'Main.java',
     template: 'import java.io.*;\nimport java.util.*;\n\npublic class Main {\n    public static void main(String[] args) throws Exception {\n        FastScanner fs = new FastScanner(System.in);\n        \n    }\n\n    static class FastScanner {\n        private final BufferedReader br;\n        private StringTokenizer st;\n        FastScanner(InputStream in) { br = new BufferedReader(new InputStreamReader(in)); }\n        String next() throws IOException {\n            while (st == null || !st.hasMoreTokens()) {\n                String line = br.readLine();\n                if (line == null) return null;\n                st = new StringTokenizer(line);\n            }\n            return st.nextToken();\n        }\n    }\n}\n',
     enabled: true,
+    compile: ['javac', '-encoding', 'UTF-8', '{src}'],
+    run: ['java', '-cp', '/box', 'Main'],
+    processes: 64,
   },
 ];

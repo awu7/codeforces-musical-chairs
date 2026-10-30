@@ -85,13 +85,16 @@ export class Store extends EventEmitter {
       const parsed = JSON.parse(await readFile(this.file, 'utf8')) as Partial<PersistedState>;
       const base = freshState();
       const savedConfig: Record<string, unknown> = { ...parsed.config };
-      delete savedConfig.runTimeLimitMs;
-      delete savedConfig.runMemoryMb;
       const languages = parsed.languages?.map((language) => {
-        const savedLanguage: Record<string, unknown> = { ...language };
-        delete savedLanguage.compile;
-        delete savedLanguage.run;
-        return savedLanguage as unknown as Language;
+        const defaultLanguage = base.languages.find((item) => item.id === language.id);
+        const savedLanguage = language as Language;
+        return {
+          ...defaultLanguage,
+          ...savedLanguage,
+          compile: savedLanguage.compile ?? defaultLanguage?.compile,
+          run: savedLanguage.run ?? defaultLanguage?.run ?? [],
+          processes: savedLanguage.processes ?? defaultLanguage?.processes,
+        };
       });
       this.state = {
         ...base,

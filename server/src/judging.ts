@@ -1,9 +1,9 @@
 import type { Submission } from '../../shared/types.js';
 import { AccountQueue } from './cf/account-queue.js';
-import type { Runner } from './cf/runner.js';
 import { CodeforcesBridge } from './cf/bridge.js';
 import { userStatus } from './cf/api.js';
 import { GameEngine } from './engine.js';
+import type { Runner } from './isolate.js';
 import { CodeforcesJudge } from './judge/codeforces.js';
 import { LocalJudge } from './judge/local.js';
 import { autoAccept, waitingForManualVerdict } from './judge/manual.js';
@@ -20,7 +20,7 @@ export class JudgingService {
     bridge: CodeforcesBridge,
     accountQueue: AccountQueue,
   ) {
-    this.local = new LocalJudge(runner);
+    this.local = new LocalJudge(runner, store);
     this.codeforces = new CodeforcesJudge(store, bridge, accountQueue);
   }
 

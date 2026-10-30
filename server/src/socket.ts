@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import { Server } from 'socket.io';
 import type { RunRequest, RunResult } from '../../shared/types.js';
-import type { Runner } from './cf/runner.js';
+import type { Runner } from './isolate.js';
 import { GameEngine } from './engine.js';
 import { JudgingService } from './judging.js';
 import { Store } from './store.js';
@@ -142,9 +142,9 @@ export function createSocketServer(deps: SocketDependencies): Server {
 
     socket.on('run', async (payload: RunRequest, ack?: Ack) => {
       const identity = joined.get(socket.id);
-      const error = (message: string) => ({ status: 'error', stdout: '', stderr: message, compileOutput: '', timeMs: 0, exitCode: null, truncated: false });
+      const error = (message: string) => ({ status: 'error', stdout: '', stderr: message, compileOutput: '', timeMs: 0, memoryKb: null, exitCode: null, truncated: false });
       if (!identity) { ack?.(error('Join a seat first')); return; }
-      if (!store.state.config.allowLocalRun) { ack?.(error('Codeforces custom invocation is disabled')); return; }
+      if (!store.state.config.allowLocalRun) { ack?.(error('Local runs are disabled')); return; }
       if (store.state.lock.locked) { ack?.(error('Clients are locked by admin')); return; }
       if (store.state.phase !== 'running') { ack?.(error('Run is only available while the game is running')); return; }
       const found = engine.findSlot(payload?.slotId ?? '');
@@ -158,7 +158,10 @@ export function createSocketServer(deps: SocketDependencies): Server {
       if (!language) { ack?.(error('Language is not enabled')); return; }
       activeRuns.add(seatKey);
       try {
-        const result: RunResult = await runner.run(language, payload.code, payload.input);
+        const result: RunResult = await runner.run(language, payload.code, payload.input, {
+          timeMs: store.state.config.runTimeLimitMs,
+          memoryMb: store.state.config.runMemoryMb,
+        });
         ack?.(result);
       } catch (caught) {
         ack?.(error((caught as Error).message));

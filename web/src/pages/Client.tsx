@@ -245,7 +245,7 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
       const r = await emitAck<RunResult>(socket, 'run', { slotId, lang, code, input });
       setRun(r);
     } catch (e) {
-      setRun({ status: 'error', stdout: '', stderr: String(e), compileOutput: '', timeMs: 0, exitCode: null, truncated: false });
+      setRun({ status: 'error', stdout: '', stderr: String(e), compileOutput: '', timeMs: 0, memoryKb: null, exitCode: null, truncated: false });
     } finally {
       setRunning(false);
     }

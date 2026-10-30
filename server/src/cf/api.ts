@@ -12,15 +12,50 @@ interface CfProblemset {
   problems?: CfProblem[];
 }
 
+const MIN_API_SPACING_MS = 2100;
+let apiQueue: Promise<void> = Promise.resolve();
+let lastApiCallAt = 0;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function requestApi(url: string | URL): Promise<{ status?: string; comment?: string; result?: unknown }> {
+  const operation = apiQueue.then(async () => {
+    for (let retry = 0; ; retry += 1) {
+      const waitMs = Math.max(0, lastApiCallAt + MIN_API_SPACING_MS - Date.now());
+      if (waitMs) await delay(waitMs);
+      lastApiCallAt = Date.now();
+      const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+      const text = await response.text();
+      let body: { status?: string; comment?: string; result?: unknown };
+      try {
+        body = JSON.parse(text) as typeof body;
+      } catch {
+        throw new Error(`Codeforces API returned a non-JSON response (HTTP ${response.status})`);
+      }
+      const comment = String(body.comment ?? '');
+      if (/Call limit exceeded/i.test(comment)) {
+        if (retry >= 3) throw new Error(comment);
+        await delay(5000);
+        continue;
+      }
+      if (!response.ok) throw new Error(`Codeforces API returned HTTP ${response.status}`);
+      if (body.status !== 'OK') throw new Error(comment || 'Codeforces API failed');
+      return body;
+    }
+  });
+  apiQueue = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
 let problemCache: { expiresAt: number; problems: CfProblem[] } | null = null;
 
 export async function getProblemset(force = false): Promise<CfProblem[]> {
   if (!force && problemCache && problemCache.expiresAt > Date.now()) return problemCache.problems;
-  const response = await fetch('https://codeforces.com/api/problemset.problems', { signal: AbortSignal.timeout(20_000) });
-  if (!response.ok) throw new Error(`Codeforces API returned HTTP ${response.status}`);
-  const body = await response.json() as { status?: string; comment?: string; result?: CfProblemset };
-  if (body.status !== 'OK') throw new Error(body.comment ?? 'Codeforces problemset API failed');
-  const problems = body.result?.problems ?? [];
+  const body = await requestApi('https://codeforces.com/api/problemset.problems');
+  const result = body.result as CfProblemset | undefined;
+  const problems = result?.problems ?? [];
   problemCache = { expiresAt: Date.now() + 60 * 60_000, problems };
   return problems;
 }
@@ -62,9 +97,6 @@ export async function userStatus(handle: string, count = 20): Promise<Array<Reco
   url.searchParams.set('handle', handle);
   url.searchParams.set('from', '1');
   url.searchParams.set('count', String(count));
-  const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-  if (!response.ok) throw new Error(`Codeforces API returned HTTP ${response.status}`);
-  const body = await response.json() as { status?: string; comment?: string; result?: Array<Record<string, unknown>> };
-  if (body.status !== 'OK') throw new Error(body.comment ?? 'Codeforces user.status API failed');
-  return body.result ?? [];
+  const body = await requestApi(url);
+  return body.result as Array<Record<string, unknown>> ?? [];
 }
