@@ -136,6 +136,19 @@ function JoinScreen({ busy, error, onJoin }: { busy: boolean; error: string | nu
 
 type Tab = 'output' | 'submissions';
 
+function freshSent(code: Record<string, string>, input: string) {
+  return {
+    code: Object.fromEntries(Object.entries(code).map(([l, c]) => [l, new Set([c])])) as Record<string, Set<string>>,
+    input: new Set([input]),
+  };
+}
+
+function remember(values: Set<string>, value: string) {
+  values.delete(value);
+  values.add(value);
+  if (values.size > 50) values.delete(values.values().next().value as string);
+}
+
 function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socket: Socket; connected: boolean; onLeave: () => void }) {
   useNow(250);
   const slot = view.slot;
@@ -155,7 +168,9 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
   const [clientPolling, setClientPolling] = useState(false);
 
   const pending = useRef<{ code?: Record<string, string>; input?: string; lang?: string }>({});
-  const lastSent = useRef<{ code: Record<string, string>; input: string }>({ code: { ...slot.code }, input: slot.input });
+  // Values this client has sent for the current attempt; server echoes of any of them (possibly out of date) are ignored.
+  const sent = useRef(freshSent(slot.code, slot.input));
+  const attemptRef = useRef(slot.attemptStartedAt);
   const timer = useRef<number | null>(null);
   const slotRef = useRef(slot.id);
   const viewRef = useRef(view);
@@ -173,11 +188,11 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
     const sends: Promise<unknown>[] = [];
     if (p.code)
       for (const [l, c] of Object.entries(p.code)) {
-        lastSent.current.code[l] = c;
+        remember(sent.current.code[l] ??= new Set(), c);
         sends.push(emitAck(socket, 'slot:update', { slotId: sid, lang: l, code: c }, 5000).catch(() => {}));
       }
     if (p.input !== undefined || p.lang !== undefined) {
-      if (p.input !== undefined) lastSent.current.input = p.input;
+      if (p.input !== undefined) remember(sent.current.input, p.input);
       sends.push(emitAck(socket, 'slot:update', { slotId: sid, lang: p.lang, input: p.input }, 5000).catch(() => {}));
     }
     return Promise.all(sends);
@@ -195,7 +210,8 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
       slotRef.current = slot.id;
       pending.current = {};
       if (timer.current) clearTimeout(timer.current);
-      lastSent.current = { code: { ...slot.code }, input: slot.input };
+      sent.current = freshSent(slot.code, slot.input);
+      attemptRef.current = slot.attemptStartedAt;
       setSlotId(slot.id);
       setLang(slot.lang);
       setCodes(slot.code);
@@ -208,23 +224,31 @@ function Workspace({ view, socket, connected, onLeave }: { view: SeatView; socke
       }
       return;
     }
+    if (slot.attemptStartedAt !== attemptRef.current) {
+      // New problem in the same slot: the server reset the editor, so take its state.
+      attemptRef.current = slot.attemptStartedAt;
+      pending.current = {};
+      if (timer.current) clearTimeout(timer.current);
+      sent.current = freshSent(slot.code, slot.input);
+      setCodes(slot.code);
+      setInput(slot.input);
+      return;
+    }
     const p = pending.current;
     setCodes((cur) => {
       let changed = false;
       const next = { ...cur };
       for (const [l, c] of Object.entries(slot.code)) {
-        if (p.code?.[l] !== undefined) continue;
-        if (c !== cur[l] && c !== lastSent.current.code[l]) {
-          next[l] = c;
-          lastSent.current.code[l] = c;
-          changed = true;
-        }
+        if (p.code?.[l] !== undefined || c === cur[l] || sent.current.code[l]?.has(c)) continue;
+        next[l] = c;
+        sent.current.code[l] = new Set([c]);
+        changed = true;
       }
       return changed ? next : cur;
     });
-    if (p.input === undefined && slot.input !== lastSent.current.input) {
+    if (p.input === undefined && !sent.current.input.has(slot.input)) {
       setInput(slot.input);
-      lastSent.current.input = slot.input;
+      sent.current.input = new Set([slot.input]);
     }
     if (p.lang === undefined) setLang(slot.lang);
   }, [slot, view.clock.lazyMode]);
