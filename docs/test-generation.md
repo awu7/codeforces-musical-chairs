@@ -73,9 +73,11 @@ newline.
    Roughly 10 test files per problem is fine — make full use of multitest inputs (`t` followed
    by `t` cases, as on Codeforces) so the ~10 files still exercise many different cases:
    - the statement samples first, copied exactly, as tests 001..k;
-   - many small random tests;
    - edge cases: minimum values, all-equal values, sorted/reverse-sorted, single element,
-     answer 0 / impossible / both YES and NO, values large enough to overflow 32-bit integers;
+     answer 0 / impossible / both YES and NO, values large enough to overflow 32-bit integers.
+     Coalesce many small edge cases into ONE multitest input — a single file that exercises
+     several different edge cases is ideal — but respect every sum-over-test-cases limit;
+   - many small random tests, likewise packed into shared multitest files;
    - several maximum-size tests that hit the stated limits (including any sum-of-n limit), with
      structures that defeat naive or slow solutions (worst cases for quadratic algorithms;
      chains, stars and long paths for trees and graphs; anti-hash or anti-quicksort patterns
