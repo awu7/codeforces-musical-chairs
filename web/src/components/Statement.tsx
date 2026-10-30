@@ -9,16 +9,26 @@ function decode(s: string) {
 
 function tex(src: string, display: boolean) {
   try {
-    return katex.renderToString(decode(src), { displayMode: display, throwOnError: false });
+    return katex.renderToString(src, { displayMode: display, throwOnError: false });
   } catch {
     return src;
   }
 }
 
+// Statements scraped after MathJax ran contain its rendered spans plus the original TeX in <script type="math/tex">.
+const MATHJAX_OUTPUT = '.MathJax_Preview, .MathJax, .MathJax_Display, .MathJax_CHTML, .MathJax_SVG, .MJX_Assistive_MathML, .mjx-chtml';
+
 export function renderMath(html: string) {
-  return html
-    .replace(/\$\$\$\$\$\$([\s\S]+?)\$\$\$\$\$\$/g, (_, t) => tex(t, true))
-    .replace(/\$\$\$([\s\S]+?)\$\$\$/g, (_, t) => tex(t, false));
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.body.querySelectorAll(MATHJAX_OUTPUT).forEach((el) => el.remove());
+  doc.body.querySelectorAll('script[type^="math/tex"]').forEach((script) => {
+    const span = doc.createElement('span');
+    span.innerHTML = tex(script.textContent ?? '', /mode=display/.test(script.getAttribute('type') ?? ''));
+    script.replaceWith(span);
+  });
+  return doc.body.innerHTML
+    .replace(/\$\$\$\$\$\$([\s\S]+?)\$\$\$\$\$\$/g, (_, t) => tex(decode(t), true))
+    .replace(/\$\$\$([\s\S]+?)\$\$\$/g, (_, t) => tex(decode(t), false));
 }
 
 export default function Statement({ html }: { html: string }) {
