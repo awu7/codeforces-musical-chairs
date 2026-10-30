@@ -84,6 +84,8 @@ export class Store extends EventEmitter {
     try {
       const parsed = JSON.parse(await readFile(this.file, 'utf8')) as Partial<PersistedState>;
       const base = freshState();
+      const needsProblemMetadataMigration = (parsed.problems ?? []).some((problem) =>
+        typeof problem.testCount !== 'number' || typeof problem.needsChecker !== 'boolean');
       const savedConfig: Record<string, unknown> = { ...parsed.config };
       const defaultTeamLazyMode = typeof savedConfig.lazyMode === 'boolean'
         ? savedConfig.lazyMode
@@ -122,6 +124,13 @@ export class Store extends EventEmitter {
         ...base,
         ...parsed,
         teams: teams ?? base.teams,
+        problems: (parsed.problems ?? base.problems).map((problem) => ({
+          ...problem,
+          samples: problem.samples ?? [],
+          extraTests: problem.extraTests ?? [],
+          testCount: problem.testCount ?? 0,
+          needsChecker: problem.needsChecker ?? false,
+        })),
         submissions: (parsed.submissions ?? base.submissions).map((submission) => ({
           ...submission,
           source: submission.source ?? 'server',
@@ -134,6 +143,7 @@ export class Store extends EventEmitter {
         cfBridge: { ...base.cfBridge, ...parsed.cfBridge },
         languages: languages ?? base.languages,
       } as PersistedState;
+      if (needsProblemMetadataMigration) this.changed();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw new Error(`Could not load ${this.file}: ${(error as Error).message}`);

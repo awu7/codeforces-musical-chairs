@@ -168,6 +168,15 @@ export default function ProblemsTab() {
         </select>
         <span className="muted">{rows.length} problems</span>
         <span className="spacer" />
+        <button
+          disabled={busy}
+          onClick={() => run(async () => {
+            await act('POST', '/problems/rescan-tests', {});
+            setMsg('Test data rescanned.');
+          })}
+        >
+          Rescan tests
+        </button>
         <button onClick={() => act('POST', '/problems/fetch-missing', {}).catch(() => {})}>Fetch missing statements</button>
         <button
           onClick={() =>
@@ -198,6 +207,7 @@ export default function ProblemsTab() {
           />
         </label>
       </div>
+      <div className="hint section">Generate tests by having an agent follow docs/test-generation.md, then Rescan.</div>
       {sel.size > 0 && (
         <div className="row section">
           <b>{sel.size} selected</b>
@@ -227,6 +237,7 @@ export default function ProblemsTab() {
             <th>CF rating</th>
             <th>Tags</th>
             <th>Statement</th>
+            <th>Tests</th>
             <th>Used</th>
             <th>Enabled</th>
             <th></th>
@@ -258,6 +269,7 @@ export default function ProblemsTab() {
             <div className="muted">
               {preview.samples.length} sample(s), {preview.extraTests.length} extra test(s)
             </div>
+            <div className="muted">Disk tests: {preview.testCount} · Needs checker: {preview.needsChecker ? 'yes' : 'no'}</div>
           </div>
         </div>
       )}
@@ -266,7 +278,7 @@ export default function ProblemsTab() {
 }
 
 function ProblemRow({ p, used, selected, onToggle, onEdit, onPreview }: { p: P; used: number; selected: boolean; onToggle: () => void; onEdit: (p: Problem) => void; onPreview: (p: Problem) => void }) {
-  const { act } = useAdmin();
+  const { act, s } = useAdmin();
   const [r, setR] = useState(String(p.rating));
   const full = () => api<Problem>('GET', `/admin/problems/${encodeURIComponent(p.id)}`);
   return (
@@ -298,6 +310,14 @@ function ProblemRow({ p, used, selected, onToggle, onEdit, onPreview }: { p: P; 
         <span className="muted" style={{ fontSize: 11 }}>
           {p.samples.length ? `${p.samples.length} samples` : ''}
         </span>
+      </td>
+      <td>
+        <div className="row" style={{ gap: 4 }}>
+          <span className={`badge ${s.config.judgeMode === 'local' && p.testCount === 0 && p.extraTestCount === 0 ? 'warn' : ''}`}>
+            {p.testCount > 0 ? p.testCount : 'none'}
+          </span>
+          {p.needsChecker && <span className="badge warn">needs checker</span>}
+        </div>
       </td>
       <td>{used || ''}</td>
       <td>
@@ -386,6 +406,7 @@ function EditModal({ p, onClose }: { p: Problem | null; onClose: () => void }) {
           </button>
         </div>
         <div className="form-grid">
+          {p && <div className="muted">Disk tests: {p.testCount} · Needs checker: {p.needsChecker ? 'yes' : 'no'}</div>}
           {!p && (
             <label className="field">
               Id (CF id like 1850A to allow CF judging)

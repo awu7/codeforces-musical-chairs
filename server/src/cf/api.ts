@@ -86,6 +86,8 @@ export function problemFromCf(cf: CfProblem): Problem {
     memoryLimit: null,
     samples: [],
     extraTests: [],
+    testCount: 0,
+    needsChecker: false,
     fetchStatus: 'pending',
     fetchError: null,
     fetchedAt: null,

@@ -2,11 +2,22 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { Language, RunResult } from '../../shared/types.js';
+import type { Language, RunResult, Sample } from '../../shared/types.js';
 import { Store } from './store.js';
 
 export interface Runner {
   run(language: Language, code: string, input: string, limits?: { timeMs: number; memoryMb: number }): Promise<RunResult>;
+  runTests(
+    language: Language,
+    code: string,
+    tests: Sample[],
+    limits: { timeMs: number; memoryMb: number },
+  ): Promise<RunnerTestResult[]>;
+}
+
+export interface RunnerTestResult {
+  run: RunResult;
+  verdict: 'pass' | 'wrong_answer' | 'judge_error' | null;
 }
 
 interface CommandResult {
@@ -79,6 +90,18 @@ function languageSource(language: Language): string {
   return src;
 }
 
+export function sameTokens(actual: string, expected: string): boolean {
+  const left = actual.trim().split(/\s+/).filter(Boolean);
+  const right = expected.trim().split(/\s+/).filter(Boolean);
+  return left.length === right.length && left.every((token, index) => {
+    const answer = right[index]!;
+    if (token === answer) return true;
+    const lowerToken = token.toLowerCase();
+    const lowerAnswer = answer.toLowerCase();
+    return (lowerToken === 'yes' && lowerAnswer === 'yes') || (lowerToken === 'no' && lowerAnswer === 'no');
+  });
+}
+
 class BoxPool {
   private readonly active = new Set<number>();
   private readonly waiters = new Set<() => void>();
@@ -129,12 +152,32 @@ export class IsolateRunner implements Runner {
     input: string,
     limits?: { timeMs: number; memoryMb: number },
   ): Promise<RunResult> {
+    const results = await this.runCases(language, code, [{ input, output: '' }], limits, false);
+    return results[0]?.run ?? errorResult('Sandbox (isolate) unavailable');
+  }
+
+  async runTests(
+    language: Language,
+    code: string,
+    tests: Sample[],
+    limits: { timeMs: number; memoryMb: number },
+  ): Promise<RunnerTestResult[]> {
+    return this.runCases(language, code, tests, limits, true);
+  }
+
+  private async runCases(
+    language: Language,
+    code: string,
+    tests: Sample[],
+    limits: { timeMs: number; memoryMb: number } | undefined,
+    compareOutput: boolean,
+  ): Promise<RunnerTestResult[]> {
     const lease = await this.pool.acquire(this.store);
     const { id, release } = lease;
     let boxDir = '';
     let initialized = false;
-    let result = errorResult('Sandbox (isolate) unavailable');
     let metaDir = '';
+    let results: RunnerTestResult[] = [];
 
     try {
       const config = this.store.state.config;
@@ -147,109 +190,173 @@ export class IsolateRunner implements Runner {
       await execute(this.binary, ['--cg', '-b', String(id), '--cleanup'], 10_000);
       const init = await execute(this.binary, ['--cg', '-b', String(id), '--init'], 10_000);
       boxDir = init.stdout.trim().split(/\r?\n/).at(-1) ?? '';
-      if (init.error || init.exitCode !== 0 || !boxDir) return errorResult('Sandbox (isolate) unavailable');
-      initialized = true;
+      if (init.error || init.exitCode !== 0 || !boxDir) {
+        results = [{ run: errorResult('Sandbox (isolate) unavailable'), verdict: null }];
+      } else {
+        initialized = true;
+      }
+      if (!initialized) return results;
       metaDir = await mkdtemp(path.join(os.tmpdir(), 'musical-chairs-isolate-'));
       await writeFile(path.join(boxDir, 'box', source), code, { encoding: 'utf8' });
-      await writeFile(path.join(boxDir, 'box', 'input.txt'), input, { encoding: 'utf8' });
 
-      if (language.compile?.length) {
-        if (!Array.isArray(language.compile)) return errorResult('Language compile command is invalid');
-        const compileMeta = path.join(metaDir, 'compile.meta');
-        const compileTimeSec = Math.max(0.001, config.compileTimeLimitMs / 1000);
-        const compileArgs = [
-          '--cg', '-b', String(id),
-          `--time=${compileTimeSec}`,
-          `--wall-time=${compileTimeSec}`,
-          '--cg-mem=1048576',
-          '--processes=64',
-          '--fsize=262144',
-          '-E', 'PATH=/usr/bin:/bin',
-          '--chdir=/box',
-          '--stdout=/box/compile.stdout',
-          '--stderr=/box/compile.stderr',
-          `--meta=${compileMeta}`,
-          '--run', '--',
-          ...resolveExecutable(substituteArgs(language.compile, source, executable)),
-        ];
-        const compiled = await execute(this.binary, compileArgs, config.compileTimeLimitMs + 10_000);
-        if (isMissingBinary(compiled.error)) return errorResult('Sandbox (isolate) unavailable');
-        const meta = parseMeta(await readFile(compileMeta, 'utf8').catch(() => ''));
-        const stdout = await readCapped(path.join(boxDir, 'box', 'compile.stdout'), maxOutputBytes);
-        const stderr = await readCapped(path.join(boxDir, 'box', 'compile.stderr'), maxOutputBytes);
-        const compileOutput = `${stdout.text}${stderr.text}`;
-        if (meta.status === 'XX' || (!Object.keys(meta).length && compiled.exitCode !== 0)) {
-          return errorResult(compiled.stderr || 'Sandbox (isolate) failed while compiling');
-        }
-        if (meta['cg-oom-killed'] === '1' || meta.status || Number(meta.exitcode ?? 0) !== 0 || compiled.exitCode !== 0) {
-          return {
-            status: 'compile_error',
-            stdout: '',
-            stderr: stderr.text,
-            compileOutput,
-            timeMs: readTime(meta),
-            memoryKb: Number.isFinite(Number(meta['cg-mem'])) ? Number(meta['cg-mem']) : null,
-            exitCode: Number.isFinite(Number(meta.exitcode)) ? Number(meta.exitcode) : null,
-            truncated: stdout.truncated || stderr.truncated,
-          };
-        }
+      if (language.compile !== undefined && !Array.isArray(language.compile)) {
+        results = [{ run: errorResult('Language compile command is invalid'), verdict: null }];
+      } else if (Array.isArray(language.compile) && language.compile.length > 0) {
+        const compileResult = await this.compile(
+          id, boxDir, metaDir, language.compile, source, executable, config, maxOutputBytes, 'compile',
+        );
+        if (compileResult) results = [{ run: compileResult, verdict: null }];
       }
 
-      if (!Array.isArray(language.run) || !language.run.length) return errorResult('Language run command is not configured');
-      const metaPath = path.join(metaDir, 'run.meta');
-      const runTimeSec = timeMs / 1000;
-      const wallTimeSec = (timeMs * 2 + 1000) / 1000;
-      const runArgs = [
-        '--cg', '-b', String(id),
-        `--cg-mem=${memoryMb * 1024}`,
-        `--time=${runTimeSec}`,
-        `--wall-time=${wallTimeSec}`,
-        `--processes=${Math.max(1, Math.floor(language.processes ?? 1))}`,
-        `--fsize=${maxOutputMb * 1024}`,
-        '-E', 'PATH=/usr/bin:/bin',
-        '--chdir=/box',
-        '--stdin=/box/input.txt',
-        '--stdout=/box/stdout.txt',
-        '--stderr=/box/stderr.txt',
-        `--meta=${metaPath}`,
-        '--run', '--',
-        ...resolveExecutable(substituteArgs(language.run, source, executable)),
-      ];
-      const ran = await execute(this.binary, runArgs, Math.ceil(wallTimeSec * 1000) + 10_000);
-      if (isMissingBinary(ran.error)) return errorResult('Sandbox (isolate) unavailable');
-      const meta = parseMeta(await readFile(metaPath, 'utf8').catch(() => ''));
-      const stdout = await readCapped(path.join(boxDir, 'box', 'stdout.txt'), maxOutputBytes);
-      const stderr = await readCapped(path.join(boxDir, 'box', 'stderr.txt'), maxOutputBytes);
-      const exitValue = Number(meta.exitcode);
-      const exitCode = Number.isFinite(exitValue) ? exitValue : null;
-      const outputLimitExceeded = isOutputLimitExceeded(meta, stderr.text);
-      let status: RunResult['status'] = 'ok';
-      if (meta['cg-oom-killed'] === '1') status = 'memory';
-      else if (outputLimitExceeded) status = 'runtime_error';
-      else if (meta.status === 'TO' || meta.killed === '1') status = 'timeout';
-      else if (meta.status === 'XX' || !Object.keys(meta).length || (meta.status === undefined && exitCode === null)) status = 'error';
-      else if (meta.status === 'RE' || meta.status === 'SG' || (exitCode !== null && exitCode !== 0)) status = 'runtime_error';
-      const stderrText = [stderr.text, outputLimitExceeded ? 'output limit exceeded' : ''].filter(Boolean).join('\n');
-      result = {
-        status,
-        stdout: stdout.text,
-        stderr: stderrText || (status === 'error' ? ran.stderr : ''),
-        compileOutput: '',
-        timeMs: readTime(meta),
-        memoryKb: Number.isFinite(Number(meta['cg-mem'])) ? Number(meta['cg-mem']) : null,
-        exitCode,
-        truncated: stdout.truncated || stderr.truncated,
-      };
+      if (!results.length) {
+        if (!Array.isArray(language.run) || !language.run.length) {
+          results = [{ run: errorResult('Language run command is not configured'), verdict: null }];
+        } else {
+          for (let index = 0; index < tests.length; index += 1) {
+            const test = tests[index]!;
+            await writeFile(path.join(boxDir, 'box', 'input.txt'), test.input, { encoding: 'utf8' });
+            const runResult = await this.executeProgram(
+              id, boxDir, metaDir, language.run, source, executable, timeMs, memoryMb, language.processes ?? 1, maxOutputBytes,
+              `run-${index + 1}`,
+            );
+            if (runResult.status !== 'ok') {
+              results.push({ run: runResult, verdict: null });
+              break;
+            }
+            if (compareOutput && !sameTokens(runResult.stdout, test.output)) {
+              results.push({ run: runResult, verdict: 'wrong_answer' });
+              break;
+            }
+            results.push({ run: runResult, verdict: compareOutput ? 'pass' : null });
+          }
+        }
+      }
     } catch (caught) {
-      result = errorResult((caught as Error).message);
+      results = [{ run: errorResult((caught as Error).message), verdict: null }];
     } finally {
       const cleaned = await execute(this.binary, ['--cg', '-b', String(id), '--cleanup'], 10_000);
-      if (initialized && (cleaned.error || cleaned.exitCode !== 0) && result.status !== 'error') {
-        result = errorResult('Sandbox (isolate) cleanup failed');
+      if (
+        initialized &&
+        (cleaned.error || cleaned.exitCode !== 0) &&
+        results.length > 0 &&
+        results.every((item) => item.run.status === 'ok' && item.verdict !== 'wrong_answer' && item.verdict !== 'judge_error')
+      ) {
+        const failure = errorResult('Sandbox (isolate) cleanup failed');
+        results[results.length - 1] = { run: failure, verdict: 'judge_error' };
       }
       if (metaDir) await rm(metaDir, { recursive: true, force: true }).catch(() => undefined);
       release();
     }
-    return result;
+    return results;
+  }
+
+  private async compile(
+    id: number,
+    boxDir: string,
+    metaDir: string,
+    compileCommand: string[],
+    source: string,
+    executable: string,
+    config: Store['state']['config'],
+    maxOutputBytes: number,
+    prefix: string,
+  ): Promise<RunResult | null> {
+    const compileMeta = path.join(metaDir, `${prefix}.meta`);
+    const compileTimeSec = Math.max(0.001, config.compileTimeLimitMs / 1000);
+    const compileArgs = [
+      '--cg', '-b', String(id),
+      `--time=${compileTimeSec}`,
+      `--wall-time=${compileTimeSec}`,
+      '--cg-mem=1048576',
+      '--processes=64',
+      '--fsize=262144',
+      '-E', 'PATH=/usr/bin:/bin',
+      '--chdir=/box',
+      `--stdout=/box/${prefix}.stdout`,
+      `--stderr=/box/${prefix}.stderr`,
+      `--meta=${compileMeta}`,
+      '--run', '--',
+      ...resolveExecutable(substituteArgs(compileCommand, source, executable)),
+    ];
+    const compiled = await execute(this.binary, compileArgs, config.compileTimeLimitMs + 10_000);
+    if (isMissingBinary(compiled.error)) return errorResult('Sandbox (isolate) unavailable');
+    const meta = parseMeta(await readFile(compileMeta, 'utf8').catch(() => ''));
+    const stdout = await readCapped(path.join(boxDir, 'box', `${prefix}.stdout`), maxOutputBytes);
+    const stderr = await readCapped(path.join(boxDir, 'box', `${prefix}.stderr`), maxOutputBytes);
+    const compileOutput = `${stdout.text}${stderr.text}`;
+    if (meta.status === 'XX' || (!Object.keys(meta).length && compiled.exitCode !== 0)) {
+      return errorResult(compiled.stderr || 'Sandbox (isolate) failed while compiling');
+    }
+    if (meta['cg-oom-killed'] === '1' || meta.status || Number(meta.exitcode ?? 0) !== 0 || compiled.exitCode !== 0) {
+      return {
+        status: 'compile_error',
+        stdout: '',
+        stderr: stderr.text,
+        compileOutput,
+        timeMs: readTime(meta),
+        memoryKb: Number.isFinite(Number(meta['cg-mem'])) ? Number(meta['cg-mem']) : null,
+        exitCode: Number.isFinite(Number(meta.exitcode)) ? Number(meta.exitcode) : null,
+        truncated: stdout.truncated || stderr.truncated,
+      };
+    }
+    return null;
+  }
+
+  private async executeProgram(
+    id: number,
+    boxDir: string,
+    metaDir: string,
+    command: string[],
+    source: string,
+    executable: string,
+    timeMs: number,
+    memoryMb: number,
+    processes: number,
+    maxOutputBytes: number,
+    prefix: string,
+  ): Promise<RunResult> {
+    const metaPath = path.join(metaDir, `${prefix}.meta`);
+    const runTimeSec = timeMs / 1000;
+    const wallTimeSec = (timeMs * 2 + 1000) / 1000;
+    const runArgs = [
+      '--cg', '-b', String(id),
+      `--cg-mem=${memoryMb * 1024}`,
+      `--time=${runTimeSec}`,
+      `--wall-time=${wallTimeSec}`,
+      `--processes=${Math.max(1, Math.floor(processes))}`,
+      `--fsize=${Math.max(1, Math.floor(this.store.state.config.maxOutputMb)) * 1024}`,
+      '-E', 'PATH=/usr/bin:/bin',
+      '--chdir=/box',
+      '--stdin=/box/input.txt',
+      '--stdout=/box/output.txt',
+      '--stderr=/box/stderr.txt',
+      `--meta=${metaPath}`,
+      '--run', '--',
+      ...resolveExecutable(substituteArgs(command, source, executable)),
+    ];
+    const ran = await execute(this.binary, runArgs, Math.ceil(wallTimeSec * 1000) + 10_000);
+    const meta = parseMeta(await readFile(metaPath, 'utf8').catch(() => ''));
+    const stdout = await readCapped(path.join(boxDir, 'box', 'output.txt'), maxOutputBytes);
+    const stderr = await readCapped(path.join(boxDir, 'box', 'stderr.txt'), maxOutputBytes);
+    const exitValue = Number(meta.exitcode);
+    const exitCode = Number.isFinite(exitValue) ? exitValue : null;
+    const outputLimitExceeded = isOutputLimitExceeded(meta, stderr.text);
+    let status: RunResult['status'] = 'ok';
+    if (meta['cg-oom-killed'] === '1') status = 'memory';
+    else if (outputLimitExceeded) status = 'runtime_error';
+    else if (meta.status === 'TO' || meta.killed === '1') status = 'timeout';
+    else if (meta.status === 'XX' || !Object.keys(meta).length || (meta.status === undefined && exitCode === null)) status = 'error';
+    else if (meta.status === 'RE' || meta.status === 'SG' || (exitCode !== null && exitCode !== 0)) status = 'runtime_error';
+    const stderrText = [stderr.text, outputLimitExceeded ? 'output limit exceeded' : ''].filter(Boolean).join('\n');
+    return {
+      status,
+      stdout: stdout.text,
+      stderr: stderrText || (status === 'error' ? ran.stderr : ''),
+      compileOutput: '',
+      timeMs: readTime(meta),
+      memoryKb: Number.isFinite(Number(meta['cg-mem'])) ? Number(meta['cg-mem']) : null,
+      exitCode,
+      truncated: stdout.truncated || stderr.truncated,
+    };
   }
 }

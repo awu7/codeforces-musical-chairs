@@ -10,7 +10,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   maxRoundsPerProblem: null,
   totalRounds: null,
   autoAdvance: true,
-  judgeMode: 'cf_self',
+  judgeMode: 'local',
   difficultyMode: 'dynamic',
   difficulty: {
     startRating: 800,

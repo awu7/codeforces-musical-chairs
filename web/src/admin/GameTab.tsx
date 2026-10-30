@@ -82,9 +82,9 @@ export default function GameTab() {
           <label className="field inline">
             Judge
             <select value={s.config.judgeMode} onChange={(e) => act('PUT', '/config', { judgeMode: e.target.value }).catch(() => {})}>
+              <option value="local">Local isolate (our test data)</option>
               <option value="codeforces">Codeforces</option>
               <option value="cf_self">Self-submit on Codeforces (API polling)</option>
-              <option value="local">Local (isolate: samples + tests)</option>
               <option value="manual">Manual</option>
               <option value="auto-accept">Auto-accept (testing)</option>
             </select>

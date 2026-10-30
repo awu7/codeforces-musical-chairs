@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { io as connectSocket, type Socket } from 'socket.io-client';
 import type { Attempt, Problem, RunResult, SeatView, Team } from '../../shared/types.js';
 import { DEFAULT_LANGUAGES } from '../src/defaults.js';
 import { createBackend, type Backend } from '../src/index.js';
-import type { Runner } from '../src/isolate.js';
+import type { Runner, RunnerTestResult } from '../src/isolate.js';
+import { sameTokens } from '../src/judge/local.js';
+import { loadProblemTests, scanProblemTests } from '../src/testdata.js';
 import { runSelfSubmitE2e } from './self-submit-e2e.js';
 
 const sockets: Socket[] = [];
@@ -15,7 +17,7 @@ let lastRunLimits: { timeMs: number; memoryMb: number } | undefined;
 const fakeRunner: Runner = {
   async run(_language, code, input, limits): Promise<RunResult> {
     lastRunLimits = limits;
-    const outputs = new Map([['3 4\n', '7\n'], ['10 -2\n', '8\n']]);
+    const outputs = new Map([['3 4\n', '7\n'], ['10 -2\n', '8\n'], ['1\n', '1\n'], ['2\n', '2\n'], ['3\n', 'wrong\n']]);
     return {
       status: 'ok',
       stdout: code.includes('display-cap') ? 'x'.repeat(70 * 1024) : code.includes('wrong') ? 'wrong\n' : outputs.get(input) ?? '',
@@ -26,6 +28,20 @@ const fakeRunner: Runner = {
       exitCode: 0,
       truncated: false,
     };
+  },
+  async runTests(language, code, tests, limits): Promise<RunnerTestResult[]> {
+    const results: RunnerTestResult[] = [];
+    for (const test of tests) {
+      const result = await fakeRunner.run(language, code, test.input, limits);
+      if (result.status !== 'ok') {
+        results.push({ run: result, verdict: null });
+        break;
+      }
+      const verdict = sameTokens(result.stdout, test.output) ? 'pass' : 'wrong_answer';
+      results.push({ run: result, verdict });
+      if (verdict === 'wrong_answer') break;
+    }
+    return results;
   },
 };
 
@@ -121,6 +137,7 @@ async function testOrderedDifficulty(): Promise<void> {
     backend = await createBackend({ dataDir, runner: fakeRunner });
     const { store, engine } = backend;
     store.state.config.difficultyMode = 'ordered';
+    store.state.config.judgeMode = 'manual';
     store.state.config.uniqueness = 'global';
     const firstTeam = engine.createTeam('Ordered One', 2);
     const secondTeam = engine.createTeam('Ordered Two', 2);
@@ -143,6 +160,8 @@ async function testOrderedDifficulty(): Promise<void> {
         memoryLimit: null,
         samples: [],
         extraTests: [],
+        testCount: 0,
+        needsChecker: false,
         fetchStatus: 'none',
         fetchError: null,
         fetchedAt: null,
@@ -190,6 +209,136 @@ async function testOrderedDifficulty(): Promise<void> {
   }
 }
 
+async function testDiskBackedLocalJudging(): Promise<void> {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-disk-tests-'));
+  let backend: Backend | null = null;
+  try {
+    const root = path.join(dataDir, 'tests');
+    await mkdir(path.join(root, 'DISK3', 'tests'), { recursive: true });
+    await mkdir(path.join(root, 'NEEDS-CHECKER', 'tests'), { recursive: true });
+    for (const [name, input, output] of [
+      ['001', '1\n', '1\n'],
+      ['002', '2\n', '2\n'],
+      ['003', '3\n', '3\n'],
+    ]) {
+      await writeFile(path.join(root, 'DISK3', 'tests', `${name}.in`), input);
+      await writeFile(path.join(root, 'DISK3', 'tests', `${name}.out`), output);
+    }
+    await writeFile(path.join(root, 'DISK3', 'tests', '004.in'), 'unpaired\n');
+    await writeFile(path.join(root, 'DISK3', 'tests', '005.out'), 'unpaired output\n');
+    await writeFile(path.join(root, 'NEEDS-CHECKER', 'tests', '001.in'), 'yes\n');
+    await writeFile(path.join(root, 'NEEDS-CHECKER', 'tests', '001.out'), 'YES\n');
+    await writeFile(path.join(root, 'NEEDS-CHECKER', 'needs-checker'), '');
+
+    backend = await createBackend({ dataDir, runner: fakeRunner });
+    assert.equal(backend.store.state.config.judgeMode, 'local', 'fresh state defaults to local judging');
+    const port = await backend.listen(0, '127.0.0.1');
+    const base = `http://127.0.0.1:${port}`;
+    const login = await request<{ token: string }>(base, '/api/admin/login', 'POST', {
+      password: process.env.ADMIN_PASSWORD ?? 'admin',
+    });
+    const token = login.token;
+    const empty = await request<Problem>(base, '/api/admin/problems/manual', 'POST', {
+      id: 'EMPTY', name: 'No local tests', rating: 800,
+    }, token);
+    const diskProblem = await request<Problem>(base, '/api/admin/problems/manual', 'POST', {
+      id: 'DISK3',
+      name: 'Disk-backed problem',
+      rating: 800,
+      samples: [{ input: '1\n', output: '1\n' }, { input: '2\n', output: '2\n' }],
+    }, token);
+    const needsCheckerProblem = await request<Problem>(base, '/api/admin/problems/manual', 'POST', {
+      id: 'NEEDS-CHECKER', name: 'Non-unique answer', rating: 800, enabled: true,
+    }, token);
+    assert.deepEqual(await scanProblemTests(root, '../DISK3'), { testCount: 0, needsChecker: false });
+    assert.deepEqual(await loadProblemTests(root, '../DISK3'), { tests: [] });
+    assert.equal(empty.testCount, 0);
+    assert.equal(empty.needsChecker, false);
+    assert.equal(diskProblem.testCount, 3, 'unpaired files are excluded from the test count');
+    assert.equal(diskProblem.needsChecker, false);
+    assert.equal(needsCheckerProblem.testCount, 1);
+    assert.equal(needsCheckerProblem.needsChecker, true);
+    backend.store.state.problems.find((problem) => problem.id === 'DISK3')!.testCount = 0;
+    backend.store.state.problems.find((problem) => problem.id === 'NEEDS-CHECKER')!.needsChecker = false;
+    const rescanned = await request<Problem[]>(base, '/api/admin/problems/rescan-tests', 'POST', {}, token);
+    assert.equal(rescanned.find((problem) => problem.id === 'DISK3')?.testCount, 3);
+    assert.equal(rescanned.find((problem) => problem.id === 'NEEDS-CHECKER')?.needsChecker, true);
+
+    const team = await request<Team>(base, '/api/admin/teams', 'POST', { name: 'Disk team', size: 1 }, token);
+    await request(base, '/api/admin/game/start', 'POST', {}, token);
+    const activeAttempts = backend.store.state.attempts.filter((attempt) => attempt.outcome === 'active');
+    assert.equal(activeAttempts.length, 1);
+    assert.equal(activeAttempts[0]?.problemId, 'DISK3', 'local mode never draws the problem without tests');
+    const connected = await connectSeat(base, team.seats[0]!.code);
+    const view = await waitForView(connected.socket, (item) => item.slot.problem?.id === 'DISK3');
+    const reply = await submit(connected.socket, view.slot.id, 'disk-run');
+    assert.equal(reply.ok, true, reply.error);
+    const judged = await waitForSubmission(base, token, reply.submissionId!);
+    assert.equal(judged.verdict, 'WRONG_ANSWER');
+    const details = await request<{ failedTest: number | null }>(
+      base, `/api/admin/submissions/${reply.submissionId}`, 'GET', undefined, token,
+    );
+    assert.equal(details.failedTest, 3, 'disk test 3 fails after both sample tests pass');
+    await request(base, `/api/admin/slots/${view.slot.id}/replace`, 'POST', { problemId: 'EMPTY' }, token);
+    assert.equal(
+      backend.engine.activeAttempt(backend.engine.findSlot(view.slot.id)!.slot)?.problemId,
+      'EMPTY',
+      'an explicit admin problem pick remains available without local tests',
+    );
+    connected.socket.disconnect();
+    sockets.splice(sockets.indexOf(connected.socket), 1);
+  } finally {
+    if (backend) await backend.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+}
+
+function testSpecialAnswerComparison(): void {
+  assert.equal(sameTokens('yes', 'YES'), true);
+  assert.equal(sameTokens('Yes', 'YES'), true);
+  assert.equal(sameTokens('NO', 'YES'), false);
+  assert.equal(sameTokens('ABC', 'abc'), false);
+}
+
+async function testProblemMetadataMigration(): Promise<void> {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-problem-migration-'));
+  let backend: Backend | null = null;
+  try {
+    backend = await createBackend({ dataDir, runner: fakeRunner });
+    backend.store.state.config.judgeMode = 'cf_self';
+    backend.store.state.problems.push({
+      id: 'LEGACY', contestId: 0, index: 'LEGACY', name: 'Legacy', rating: 800, cfRating: null,
+      tags: [], enabled: true, source: 'manual', statementHtml: null, timeLimit: null, memoryLimit: null,
+      samples: [], extraTests: [], testCount: 0, needsChecker: false, fetchStatus: 'ok', fetchError: null, fetchedAt: null,
+    });
+    await backend.store.save();
+    await backend.close();
+    backend = null;
+
+    const statePath = path.join(dataDir, 'state.json');
+    const persisted = JSON.parse(await readFile(statePath, 'utf8')) as {
+      problems: Array<Record<string, unknown>>;
+    };
+    delete persisted.problems[0]!.testCount;
+    delete persisted.problems[0]!.needsChecker;
+    await writeFile(statePath, JSON.stringify(persisted));
+    backend = await createBackend({ dataDir, runner: fakeRunner });
+    assert.equal(backend.store.state.problems[0]?.testCount, 0);
+    assert.equal(backend.store.state.problems[0]?.needsChecker, false);
+    assert.equal(backend.store.state.config.judgeMode, 'cf_self', 'saved judge modes are not overwritten by the new default');
+    await backend.close();
+    backend = null;
+    const migrated = JSON.parse(await readFile(statePath, 'utf8')) as {
+      problems: Array<Record<string, unknown>>;
+    };
+    assert.equal(migrated.problems[0]?.testCount, 0, 'legacy metadata migration is persisted');
+    assert.equal(migrated.problems[0]?.needsChecker, false, 'legacy metadata migration is persisted');
+  } finally {
+    if (backend) await backend.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+}
+
 async function testTeamLazyModeMigration(): Promise<void> {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-lazy-migration-'));
   let backend: Backend | null = null;
@@ -216,6 +365,7 @@ async function testTeamLazyModeMigration(): Promise<void> {
 }
 
 async function run(): Promise<void> {
+  testSpecialAnswerComparison();
   const dataDir = await mkdtemp(path.join(tmpdir(), 'musical-chairs-e2e-'));
   let backend: Backend | null = null;
   try {
@@ -230,6 +380,7 @@ async function run(): Promise<void> {
     assert.equal(backend.store.state.config.runMemoryMb, 256);
     assert.equal(backend.store.state.config.compileTimeLimitMs, 15000);
     assert.equal(backend.store.state.config.maxOutputMb, 64);
+    assert.equal(backend.store.state.config.judgeMode, 'local');
     assert.equal(backend.store.state.config.difficultyMode, 'dynamic');
     assert.equal(backend.store.state.config.selfSubmitPollSeconds, 5);
     assert.equal(backend.store.state.config.selfSubmitColdPollSeconds, 60);
@@ -451,9 +602,11 @@ async function run(): Promise<void> {
     await backend.close();
     backend = null;
     await runSelfSubmitE2e();
+    await testDiskBackedLocalJudging();
+    await testProblemMetadataMigration();
     await testOrderedDifficulty();
     await testTeamLazyModeMigration();
-    console.log('E2E PASS: auth, teams/seats, distinct draw, local accept/reject, injected run, mixed/per-team lazy rotation, expiry, pause/resume, restart persistence, defaults migration, self-submit polling');
+    console.log('E2E PASS: auth, teams/seats, local disk tests/needs-checker metadata/rescan/migration/draw, sample fallback, lazy rotation, expiry, pause/resume, restart persistence, defaults migration, self-submit polling');
   } finally {
     for (const socket of sockets) socket.disconnect();
     if (backend) await backend.close();

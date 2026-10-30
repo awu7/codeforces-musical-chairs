@@ -7,6 +7,7 @@ import { CodeforcesBridge } from '../cf/bridge.js';
 import { GameEngine } from '../engine.js';
 import { JudgingService } from '../judging.js';
 import { Store, mergeConfig } from '../store.js';
+import { refreshAllProblemTestMetadata, refreshProblemTestMetadata } from '../testdata.js';
 
 export interface AdminDependencies {
   store: Store;
@@ -54,7 +55,10 @@ export function serializeAdminState(store: Store, engine: GameEngine) {
     teams: store.state.teams,
     attempts: store.state.attempts,
     submissions: submissions.map((item) => engine.submissionForClient(item)),
-    problems: store.state.problems.map(({ statementHtml: _html, extraTests: _tests, ...problem }) => problem),
+    problems: store.state.problems.map(({ statementHtml: _html, extraTests, ...problem }) => ({
+      ...problem,
+      extraTestCount: extraTests.length,
+    })),
     languages: store.state.languages,
     cfAccounts: store.state.cfAccounts.map(({ password: _password, ...account }) => account),
     cfBridge: store.state.cfBridge,
@@ -252,6 +256,12 @@ function makeRouter(deps: AdminDependencies): Router {
 
   router.get('/problems/export', (_req, res) => res.json({ problems: store.state.problems }));
   router.get('/problems', (_req, res) => res.json(store.state.problems));
+  router.post('/problems/rescan-tests', route(async (_req, res) => {
+    await refreshAllProblemTestMetadata(store);
+    engine.retryEmptySlots();
+    engine.changed();
+    res.json(store.state.problems);
+  }));
   router.get('/problems/:id', route(async (req, res) => {
     res.json(requireProblem(store, String(req.params.id)));
   }));
@@ -270,15 +280,18 @@ function makeRouter(deps: AdminDependencies): Router {
       const duplicate = store.state.problems.find((item) => item.id === problem.id);
       if (duplicate) {
         if (req.body.rating !== undefined) duplicate.rating = Number(req.body.rating);
+        await refreshProblemTestMetadata(store, duplicate);
         added.push(duplicate);
         continue;
       }
       if (req.body.rating !== undefined) problem.rating = Number(req.body.rating);
+      await refreshProblemTestMetadata(store, problem);
       store.state.problems.push(problem);
       added.push(problem);
       enqueueStatement(problem, deps);
     }
     store.log('info', `Added ${added.length} Codeforces problems`);
+    engine.retryEmptySlots();
     engine.changed();
     res.status(missing.length ? 207 : 201).json({ added, missing });
   }));
@@ -299,8 +312,11 @@ function makeRouter(deps: AdminDependencies): Router {
       memoryLimit: body.memoryLimit === undefined ? null : String(body.memoryLimit),
       samples: Array.isArray(body.samples) ? body.samples : [],
       extraTests: Array.isArray(body.extraTests) ? body.extraTests : [],
+      testCount: 0,
+      needsChecker: false,
       fetchStatus: 'ok', fetchError: null, fetchedAt: Date.now(),
     };
+    await refreshProblemTestMetadata(store, problem);
     store.state.problems.push(problem);
     store.log('info', `Added manual problem ${id}`);
     engine.retryEmptySlots();
@@ -381,12 +397,14 @@ function makeRouter(deps: AdminDependencies): Router {
       }
       for (const item of candidates.slice(0, perRating)) {
         const problem = problemFromCf(item);
+        await refreshProblemTestMetadata(store, problem);
         store.state.problems.push(problem);
         existing.add(problem.id);
         added.push(problem.id);
         enqueueStatement(problem, deps);
       }
     }
+    engine.retryEmptySlots();
     engine.changed();
     res.status(201).json({ added });
   }));
@@ -398,9 +416,13 @@ function makeRouter(deps: AdminDependencies): Router {
       store.state.problems.push({
         ...problem,
         statementHtml: problem.statementHtml ?? null,
+        samples: problem.samples ?? [],
         extraTests: problem.extraTests ?? [],
+        testCount: 0,
+        needsChecker: false,
         fetchStatus: problem.source === 'manual' ? 'ok' : problem.fetchStatus ?? 'none',
       });
+      await refreshProblemTestMetadata(store, store.state.problems[store.state.problems.length - 1]!);
       imported += 1;
     }
     engine.retryEmptySlots();
@@ -501,7 +523,16 @@ function makeRouter(deps: AdminDependencies): Router {
       throw new Error('Invalid state import');
     }
     const imported = req.body as typeof store.state;
+    imported.problems = (imported.problems ?? []).map((problem) => ({
+      ...problem,
+      samples: problem.samples ?? [],
+      extraTests: problem.extraTests ?? [],
+      testCount: 0,
+      needsChecker: false,
+    }));
     store.state = imported;
+    await refreshAllProblemTestMetadata(store);
+    engine.retryEmptySlots();
     store.log('info', 'State imported');
     engine.changed();
     res.json({ ok: true });

@@ -10,6 +10,7 @@ import { IsolateRunner, type Runner } from './isolate.js';
 import { JudgingService } from './judging.js';
 import { SelfSubmitWatcher, type SelfSubmitApi } from './judge/self-submit.js';
 import { Store } from './store.js';
+import { refreshAllProblemTestMetadata } from './testdata.js';
 import { adminRouter, serializeAdminState } from './routes/admin.js';
 import { createSocketServer } from './socket.js';
 import type { Server as SocketServer } from 'socket.io';
@@ -39,6 +40,7 @@ function safeEqual(left: string, right: string): boolean {
 export async function createBackend(options: BackendOptions = {}): Promise<Backend> {
   const store = new Store(options.dataDir);
   await store.load();
+  if (await refreshAllProblemTestMetadata(store)) store.changed();
   const engine = new GameEngine(store);
   const bridge = new CodeforcesBridge(store);
   const accountQueue = new AccountQueue();

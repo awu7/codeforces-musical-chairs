@@ -360,7 +360,9 @@ export class GameEngine {
         .map((attempt) => attempt.problemId));
       const problem = state.problems
         .map((item, poolIndex) => ({ item, poolIndex }))
-        .filter(({ item }) => item.enabled && (item.source === 'manual' || item.fetchStatus === 'ok'))
+        .filter(({ item }) => item.enabled && (item.source === 'manual' || item.fetchStatus === 'ok') &&
+          (state.config.judgeMode !== 'local' ||
+            (!item.needsChecker && (item.testCount > 0 || (item.extraTests?.length ?? 0) > 0))))
         .sort((a, b) => a.item.rating - b.item.rating || a.poolIndex - b.poolIndex)
         .find(({ item }) => !attemptedProblems.has(item.id) && !activeElsewhere.has(item.id))?.item;
       if (!problem) {
@@ -380,6 +382,8 @@ export class GameEngine {
     const eligible = (rating: number): Problem[] => state.problems.filter((problem) => {
       if (!problem.enabled || problem.rating !== rating) return false;
       if (problem.source !== 'manual' && problem.fetchStatus !== 'ok') return false;
+      if (state.config.judgeMode === 'local' &&
+        (problem.needsChecker || (problem.testCount <= 0 && (problem.extraTests?.length ?? 0) === 0))) return false;
       if (state.config.uniqueness === 'team') {
         return !state.attempts.some((attempt) => attempt.teamId === team.id && attempt.problemId === problem.id);
       }

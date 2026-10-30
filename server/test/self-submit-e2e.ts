@@ -23,6 +23,8 @@ function makeProblem(contestId: number): Problem {
     memoryLimit: '256 megabytes',
     samples: [],
     extraTests: [],
+    testCount: 0,
+    needsChecker: false,
     fetchStatus: 'ok',
     fetchError: null,
     fetchedAt: Date.now(),

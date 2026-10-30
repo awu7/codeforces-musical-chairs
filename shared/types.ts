@@ -91,6 +91,8 @@ export interface Problem {
   memoryLimit: string | null;     // e.g. "256 megabytes"
   samples: Sample[];
   extraTests: Sample[];           // admin-provided, used only by the local judge
+  testCount: number;
+  needsChecker: boolean;
   fetchStatus: 'none' | 'pending' | 'ok' | 'error';
   fetchError: string | null;
   fetchedAt: number | null;
@@ -290,7 +292,7 @@ export interface AdminState {
   teams: Team[];
   attempts: Attempt[];              // all attempts
   submissions: SubmissionPublic[];  // newest first, capped (200)
-  problems: Omit<Problem, 'statementHtml' | 'extraTests'>[]; // pool overview (fetch full via REST)
+  problems: (Omit<Problem, 'statementHtml' | 'extraTests'> & { extraTestCount: number })[]; // pool overview (fetch full via REST)
   languages: Language[];
   cfAccounts: CfAccountPublic[];
   cfBridge: CfBridgeStatus;

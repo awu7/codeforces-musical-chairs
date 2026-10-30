@@ -1,6 +1,9 @@
 import type { Language, Problem, Submission } from '../../../shared/types.js';
-import type { Runner } from '../isolate.js';
+import { sameTokens, type Runner } from '../isolate.js';
 import type { Store } from '../store.js';
+import { loadProblemTests, testsRoot } from '../testdata.js';
+
+export { sameTokens };
 
 export interface JudgeResult {
   verdict: string;
@@ -9,12 +12,6 @@ export interface JudgeResult {
   timeMs: number | null;
   memoryKb: number | null;
   message: string | null;
-}
-
-export function sameTokens(actual: string, expected: string): boolean {
-  const left = actual.trim().split(/\s+/).filter(Boolean);
-  const right = expected.trim().split(/\s+/).filter(Boolean);
-  return left.length === right.length && left.every((token, index) => token === right[index]);
 }
 
 function timeLimitMs(value: string | null, fallback: number): number {
@@ -41,22 +38,47 @@ export class LocalJudge {
   constructor(private readonly runner: Runner, private readonly store: Store) {}
 
   async judge(submission: Submission, language: Language, problem: Problem): Promise<JudgeResult> {
-    const tests = [...problem.samples, ...problem.extraTests];
+    let diskData: Awaited<ReturnType<typeof loadProblemTests>>;
+    try {
+      diskData = await loadProblemTests(testsRoot(this.store), problem.id);
+    } catch (error) {
+      return {
+        verdict: 'JUDGE_ERROR', passedTests: 0, failedTest: null, timeMs: null, memoryKb: null,
+        message: (error as Error).message,
+      };
+    }
+    const tests = problem.testCount > 0
+      ? [...diskData.tests, ...problem.extraTests]
+      : [...problem.samples, ...problem.extraTests];
     if (!tests.length) return {
       verdict: 'JUDGE_ERROR', passedTests: 0, failedTest: null, timeMs: null, memoryKb: null,
-      message: 'Problem has no samples or extra tests',
+      message: 'Problem has no test data',
     };
     let passedTests = 0;
     let maxTimeMs = 0;
     let maxMemoryKb = 0;
-    for (let i = 0; i < tests.length; i += 1) {
-      const test = tests[i]!;
-      const result = await this.runner.run(language, submission.code, test.input, {
+    const results = await this.runner.runTests(
+      language,
+      submission.code,
+      tests,
+      {
         timeMs: timeLimitMs(problem.timeLimit, this.store.state.config.runTimeLimitMs),
         memoryMb: memoryLimitMb(problem.memoryLimit, this.store.state.config.runMemoryMb),
-      });
+      },
+    );
+    if (!results.length) return {
+      verdict: 'JUDGE_ERROR', passedTests: 0, failedTest: null, timeMs: null, memoryKb: null,
+      message: 'Runner returned no test results',
+    };
+    for (let i = 0; i < results.length; i += 1) {
+      const testResult = results[i]!;
+      const result = testResult.run;
       maxTimeMs = Math.max(maxTimeMs, result.timeMs);
       maxMemoryKb = Math.max(maxMemoryKb, result.memoryKb ?? 0);
+      if (testResult.verdict === 'judge_error') return {
+        verdict: 'JUDGE_ERROR', passedTests, failedTest: i + 1, timeMs: result.timeMs,
+        memoryKb: result.memoryKb, message: result.stderr || 'Sandbox unavailable',
+      };
       if (result.status === 'compile_error') return {
         verdict: 'COMPILATION_ERROR', passedTests, failedTest: i + 1, timeMs: result.timeMs,
         memoryKb: result.memoryKb, message: result.compileOutput,
@@ -77,7 +99,7 @@ export class LocalJudge {
         verdict: 'RUNTIME_ERROR', passedTests, failedTest: i + 1, timeMs: result.timeMs,
         memoryKb: result.memoryKb, message: result.stderr || `Process exited with ${result.exitCode}`,
       };
-      if (!sameTokens(result.stdout, test.output)) return {
+      if (testResult.verdict === 'wrong_answer') return {
         verdict: 'WRONG_ANSWER', passedTests, failedTest: i + 1, timeMs: result.timeMs,
         memoryKb: result.memoryKb, message: null,
       };
