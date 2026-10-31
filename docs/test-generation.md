@@ -55,12 +55,14 @@ newline.
    `data/tests/<id>/needs-checker`, make sure there is no `data/tests/<id>/tests/`, give the
    reason in `work/REPORT.md`, and move on to the next problem. Otherwise continue.
 2. `work/solution.cpp`: a correct, efficient C++17 reference solution meant to run well within
-   the time limit on maximum inputs. FIRST look up the editorial or a trusted published
-   solution online — search the web for e.g. "Codeforces <contestId><index> editorial" or
-   "<problem name> solution", fetch the editorial blog or a reliable write-up, and adapt its
-   approach into your reference. This is the preferred way to guarantee correctness; write the
-   solution from scratch only if no trustworthy reference can be found. Prefer a well-known
-   approach you are confident in; avoid unproven heuristics.
+   the time limit on maximum inputs. FIRST look up the official contest editorial — search the
+   web for e.g. "Codeforces <contestId><index> editorial" — and fetch it. If the editorial
+   publishes solution code, STRONGLY prefer using that exact code (fixing only language
+   differences or compile errors) as your reference: verbatim published code is the strongest
+   correctness guarantee available. If the editorial has no code, use a trusted published
+   solution or a reliable write-up's approach; write the solution from scratch only if no
+   trustworthy reference can be found. Prefer a well-known approach you are confident in;
+   avoid unproven heuristics.
 3. `work/brute.cpp` (or `brute.py`): an obviously correct brute force for small inputs
    (exhaustive search, simulation, the direct definition). Write it independently of the
    reference solution's idea. You may skip this file when your reference is adapted from a
